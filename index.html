@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>スキーフォーム解析</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="app-header">
+    <h1>スキーフォーム解析</h1>
+    <p class="sub">お手本の滑りと比べて、どこを直せば近づけるかを表示します</p>
+  </header>
+
+  <main>
+    <div id="fatal" class="warn hidden"></div>
+    <noscript><div class="warn">JavaScript を有効にしてください。</div></noscript>
+    <section class="card">
+      <h2><span class="step">1</span>お手本（モデル）動画を選ぶ</h2>
+      <ul id="model-list" class="model-list"></ul>
+      <details class="add-model" id="add-model">
+        <summary>＋ お手本動画を登録する</summary>
+        <div class="form">
+          <label class="field">名前
+            <input type="text" id="model-name" placeholder="例：大回り・デモンストレーター">
+          </label>
+          <input type="file" id="model-file" accept="video/*">
+          <button id="model-add-btn" class="btn primary" disabled>登録して解析</button>
+          <div class="progress hidden" id="model-progress"><progress max="1" value="0"></progress><span></span></div>
+        </div>
+      </details>
+    </section>
+
+    <section class="card">
+      <h2><span class="step">2</span>あなたの滑りをアップロード</h2>
+      <p class="hint">撮影のコツ：全身が大きめに映るように撮影してください。正面〜斜め前からがおすすめです。2ターン以上入っていると精度が上がります。</p>
+      <div class="form">
+        <input type="file" id="user-file" accept="video/*">
+        <button id="analyze-btn" class="btn primary" disabled>解析して比較</button>
+        <div class="progress hidden" id="user-progress"><progress max="1" value="0"></progress><span></span></div>
+      </div>
+    </section>
+
+    <section class="card hidden" id="results">
+      <h2><span class="step">3</span>比較結果</h2>
+      <div id="warnings"></div>
+      <div class="summary" id="summary"></div>
+
+      <h3>同じ角度で比較（人形モデル）</h3>
+      <p class="hint">2本の動画の骨格を体の向きでそろえ、ターンの局面を合わせて再生します。ドラッグで視点を自由に回せます。一時停止やシークをすると、下の元動画も同じ場面に移動します。</p>
+      <div class="viewer-controls">
+        <div class="seg" id="view-buttons">
+          <button data-view="front" class="active">正面</button><button data-view="diag">斜め</button><button data-view="side">横</button><button data-view="back">後ろ</button><button data-view="top">上</button>
+        </div>
+        <div class="seg" id="mode-buttons">
+          <button data-mode="side" class="active">並べて</button><button data-mode="overlay">重ねて</button>
+        </div>
+      </div>
+      <canvas id="viewer" class="viewer"></canvas>
+      <div class="viewer-bar">
+        <button id="viewer-play" class="btn">▶ 再生</button>
+        <input type="range" id="viewer-seek" min="0" max="1000" value="0">
+        <select id="viewer-speed" class="btn">
+          <option value="0.25">0.25×</option><option value="0.5" selected>0.5×</option><option value="1">1×</option>
+        </select>
+      </div>
+      <div class="viewer-info" id="viewer-info"></div>
+
+      <h3>元の動画</h3>
+      <div class="videos">
+        <figure>
+          <figcaption><span class="dot model"></span>お手本</figcaption>
+          <div class="video-wrap" id="model-wrap"><video id="model-video" controls muted playsinline></video><canvas></canvas></div>
+        </figure>
+        <figure>
+          <figcaption><span class="dot user"></span>あなた</figcaption>
+          <div class="video-wrap" id="user-wrap"><video id="user-video" controls muted playsinline></video><canvas></canvas></div>
+        </figure>
+      </div>
+      <div class="video-actions">
+        <button id="sync-btn" class="btn">▶ 同期再生（ターンのリズムを合わせる）</button>
+        <label class="check"><input type="checkbox" id="skeleton-toggle" checked> 骨格を表示</label>
+      </div>
+
+      <h3>改善アドバイス</h3>
+      <p class="hint">お手本からのズレが大きい順に並べています。ズレ度は「差 ÷ 許容範囲」で、1を超えると目立つズレです（単位の違う指標どうしを比べるための値です）。</p>
+      <ol id="advice" class="advice"></ol>
+
+      <h3>局面ごとの比較</h3>
+      <p class="hint">数値は「あなた − お手本」の差です。色が付いているところが、目安以上にズレている局面です。</p>
+      <div class="table-scroll"><table id="phase-table" class="phase-table"></table></div>
+
+      <h3>ターン中の推移</h3>
+      <p class="hint legend"><span class="dot model"></span>お手本　<span class="dot user"></span>あなた　（ターンの切り替えから次の切り替えまでを0〜100%で表示。複数ターンの平均です）</p>
+      <div id="charts" class="charts"></div>
+    </section>
+  </main>
+
+  <script>
+    // モジュールの読み込み自体に失敗したときも原因が見えるようにする
+    function showFatal(msg) {
+      var el = document.getElementById('fatal');
+      el.textContent = msg;
+      el.classList.remove('hidden');
+    }
+    if (location.protocol === 'file:') {
+      showFatal('index.html を直接開いているため動作しません。ターミナルで「python3 -m http.server 8000」を実行し、http://localhost:8000 を開いてください。');
+    }
+    window.addEventListener('error', function (e) { showFatal('エラー：' + e.message); });
+    window.addEventListener('unhandledrejection', function (e) { showFatal('エラー：' + (e.reason && e.reason.message || e.reason)); });
+  </script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
