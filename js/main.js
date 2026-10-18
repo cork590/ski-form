@@ -3,6 +3,7 @@ import { extractPose } from './pose.js';
 import { analyzeSession, compare, METRICS, PHASES } from './analysis.js';
 import { attachSkeleton, drawProfileChart } from './draw.js';
 import { createViewer } from './viewer3d.js';
+import { IS_BETA, VERSION } from './config.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -16,6 +17,9 @@ const state = {
 };
 
 try { state.selectedId = localStorage.getItem('selectedModelId'); } catch {}
+
+$('version').textContent = `v${VERSION}${IS_BETA ? '（試験版）' : ''}`;
+if (IS_BETA) document.body.classList.add('beta');
 
 // ---------- お手本の一覧 ----------
 async function renderModelList() {
@@ -209,7 +213,11 @@ function renderResults({ model, modelAna, userFile, userPose, userAna, result })
         <div class="title">${esc(a.title)}</div>
         <div class="gap"><span>ズレ度 ${a.score.toFixed(1)}</span><span class="bar"><span style="width:${(a.score / maxScore) * 100}%"></span></span></div>
         <div class="meta">${esc(a.def.label)}：お手本との差 ${fmt(a.diff, a.def.digits)}${esc(a.def.unit)}${a.phases.length ? ` ・ ${a.phases.join('、')}で目立ちます` : ''}</div>
-        <p class="tip">${esc(a.tip)}</p>
+        <p class="why">${esc(a.why)}</p>
+        <div class="action">→ ${esc(a.action)}</div>
+        <div class="cues-label">そのために意識すること</div>
+        <ul class="cues">${a.cues.map((c) => `<li>${esc(c)}</li>`).join('')}</ul>
+        <div class="drill"><span>おすすめ練習</span>${esc(a.drill)}</div>
       </li>`).join('')
     : '<li class="good"><div class="title">大きなズレは見つかりませんでした</div><p class="tip">どの指標もお手本との差が目安の範囲内です。細かい違いは下の表とグラフで確認できます。</p></li>';
 

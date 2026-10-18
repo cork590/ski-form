@@ -1,5 +1,6 @@
 // お手本動画と骨格データを IndexedDB に保存する
-const DB_NAME = 'ski-form';
+import { DB_NAME } from './config.js';
+
 const STORE = 'models';
 
 function open() {

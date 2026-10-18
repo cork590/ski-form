@@ -126,7 +126,7 @@ main { max-width: 1100px; margin: 0 auto; padding: 8px 16px 48px; }
 .dot.user { background: var(--series-user); }
 
 .advice { padding-left: 0; list-style: none; margin: 0; display: flex; flex-direction: column; gap: 10px; }
-.advice li { border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 8px; padding: 10px 14px; }
+.advice > li { border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 8px; padding: 10px 14px; }
 .advice .title { font-weight: 700; }
 .advice .meta { color: var(--text-muted); font-size: 0.85rem; margin: 2px 0 4px; }
 .advice .tip { margin: 0; }
@@ -158,14 +158,26 @@ main { max-width: 1100px; margin: 0 auto; padding: 8px 16px 48px; }
 .viewer-info { color: var(--text-muted); font-size: 0.9rem; margin-top: 4px; min-height: 1.5em; }
 
 .stat .note { color: var(--text-muted); font-size: 0.75rem; }
-.advice li { display: grid; grid-template-columns: 32px 1fr; gap: 0 10px; }
+.advice > li { display: grid; grid-template-columns: 32px 1fr; gap: 0 10px; }
 .advice .rank {
-  grid-row: span 4; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
+  grid-row: span 8; align-self: start; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
   background: var(--accent); color: var(--accent-text); font-weight: 700; font-size: 0.9rem;
 }
 .advice .gap { display: flex; align-items: center; gap: 8px; font-size: 0.8rem; color: var(--text-muted); margin: 2px 0 4px; }
 .advice .gap .bar { flex: 0 1 220px; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
 .advice .gap .bar span { display: block; height: 100%; background: var(--bad-text); border-radius: 3px; }
+
+.advice .why { margin: 0 0 6px; color: var(--text-muted); }
+.advice .action { font-weight: 700; color: var(--accent); margin-bottom: 4px; }
+.advice .cues-label { font-size: 0.85rem; font-weight: 600; }
+.advice .cues { margin: 2px 0 6px; padding-left: 1.2em; }
+.advice .cues li { margin: 2px 0; }
+.advice .drill { font-size: 0.9rem; background: var(--bg); border-radius: 6px; padding: 6px 10px; }
+.advice .drill span { font-weight: 600; margin-right: 8px; }
+
+.beta-banner { display: none; margin-top: 10px; background: var(--warn-bg); color: var(--warn-text); padding: 8px 12px; border-radius: 8px; font-size: 0.9rem; }
+.beta .beta-banner { display: block; }
+.app-footer { max-width: 1100px; margin: 0 auto; padding: 0 16px 32px; color: var(--text-muted); font-size: 0.8rem; }
 
 @media (max-width: 700px) {
   .viewer { height: 340px; }
