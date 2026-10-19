@@ -14,7 +14,7 @@ GitHub Pages で公開しています。URLを知っているメンバーだけ�
 
 ```sh
 cd "/Volumes/SN770/開発/個人アプリ/スキーフォーム解析"
-python3 -m http.server 8000
+python3 serve.py 8000
 ```
 
 ブラウザ（Chrome推奨）で http://localhost:8000 を開きます。
