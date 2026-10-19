@@ -151,7 +151,7 @@ function frameQuality(frames, fps) {
     i = j + 1;
   }
   return {
-    smallRatio: small.filter(Boolean).length / (frames.length || 1),
+    smallRatio: small.filter(Boolean).length / (frames.filter((f) => f.status !== 'skip').length || 1),
     smallRanges: ranges.slice(0, 3).join('、') || '短い区間が点在',
   };
 }
@@ -230,7 +230,8 @@ function turnSeries(raw, turn) {
 export function analyzeSession(pose) {
   const { frames, fps } = pose;
   const warnings = [];
-  const validRatio = frames.filter((f) => f.wl).length / (frames.length || 1);
+  const inRange = frames.filter((f) => f.status !== 'skip');
+  const validRatio = inRange.filter((f) => f.wl).length / (inRange.length || 1);
   const wl = fillGaps(frames, 'wl');
   if (!wl) throw new Error('動画から人物を検出できませんでした。全身が映っている動画を使ってください。');
   const quality = frameQuality(frames, fps);

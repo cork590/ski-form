@@ -187,9 +187,13 @@ main { max-width: 1100px; margin: 0 auto; padding: 8px 16px 48px; }
 }
 .pick-dialog::backdrop { background: rgba(0, 0, 0, 0.5); }
 .pick-dialog h2 { margin: 0 0 8px; font-size: 1.1rem; }
-.pick-wrap { max-height: 60vh; margin: 0 auto; }
+.pick-wrap { max-height: 45vh; margin: 0 auto; }
 .pick-wrap canvas { pointer-events: auto; cursor: pointer; }
 .pick-dialog input[type=range] { width: 100%; margin-top: 10px; }
+.trim-track { position: relative; height: 6px; background: var(--border); border-radius: 3px; margin-top: 12px; }
+.trim-range { position: absolute; top: 0; bottom: 0; background: var(--accent); border-radius: 3px; }
+.trim-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; }
+.trim-label { flex: 1; text-align: center; font-size: 0.85rem; font-variant-numeric: tabular-nums; }
 .pick-status { font-size: 0.9rem; margin: 6px 0 12px; }
 .pick-actions { display: flex; gap: 10px; justify-content: flex-end; }
 

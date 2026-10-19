@@ -61,7 +61,7 @@ $('model-list').addEventListener('click', async (e) => {
 });
 
 // ---------- 解析する人を選ぶ ----------
-// 戻り値: { t, box }（選んだ人）／ null（自動で選ぶ）／ undefined（キャンセル）
+// 戻り値: { target: { t, box } | null（自動で選ぶ）, range: [開始秒, 終了秒] }／ undefined（キャンセル）
 function choosePerson(file) {
   return new Promise((resolve) => {
     const dlg = $('pick-dialog'), video = $('pick-video'), canvas = $('pick-canvas');
@@ -69,6 +69,14 @@ function choosePerson(file) {
     const url = URL.createObjectURL(file);
     let boxes = [];
     let busy = false, pending = false;
+    let range = [0, 0];
+    const renderRange = () => {
+      const d = video.duration || 1;
+      $('trim-range').style.left = `${(range[0] / d) * 100}%`;
+      $('trim-range').style.width = `${((range[1] - range[0]) / d) * 100}%`;
+      const whole = range[0] <= 0.05 && range[1] >= d - 0.05;
+      $('trim-label').textContent = `解析範囲：${range[0].toFixed(1)}〜${range[1].toFixed(1)}秒${whole ? '（全体）' : `（${(range[1] - range[0]).toFixed(1)}秒間）`}`;
+    };
 
     const draw = () => {
       const { ctx, w: cw, h: ch } = fitCanvas(canvas);
@@ -107,6 +115,8 @@ function choosePerson(file) {
     };
     const onLoaded = () => {
       $('pick-wrap').style.aspectRatio = `${video.videoWidth} / ${video.videoHeight}`;
+      range = [0, video.duration];
+      renderRange();
       video.currentTime = Math.min(video.duration / 2, 0.1);
     };
     const onSeek = () => { video.currentTime = (Number(seek.value) / 1000) * (video.duration || 0); };
@@ -116,7 +126,12 @@ function choosePerson(file) {
       const x = (e.clientX - rect.left - r.x) / r.w, y = (e.clientY - rect.top - r.y) / r.h;
       const hit = boxes.filter((b) => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h)
         .sort((a, b) => a.w * a.h - b.w * b.h)[0];
-      if (hit) finish({ t: video.currentTime, box: hit });
+      if (!hit) return;
+      if (video.currentTime < range[0] || video.currentTime > range[1]) {
+        status.textContent = '解析範囲の外の場面です。範囲の中の場面で人を選んでください。';
+        return;
+      }
+      finish({ target: { t: video.currentTime, box: hit }, range });
     };
     const finish = (value) => {
       video.removeEventListener('loadeddata', onLoaded);
@@ -124,6 +139,7 @@ function choosePerson(file) {
       seek.removeEventListener('input', onSeek);
       canvas.removeEventListener('click', onClick);
       $('pick-auto').onclick = $('pick-cancel').onclick = null;
+      $('trim-start').onclick = $('trim-end').onclick = $('trim-reset').onclick = null;
       dlg.onclose = null;
       dlg.close();
       video.removeAttribute('src');
@@ -136,7 +152,19 @@ function choosePerson(file) {
     video.addEventListener('seeked', refresh);
     seek.addEventListener('input', onSeek);
     canvas.addEventListener('click', onClick);
-    $('pick-auto').onclick = () => finish(null);
+    $('pick-auto').onclick = () => finish({ target: null, range });
+    $('trim-start').onclick = () => {
+      range = [Math.min(video.currentTime, range[1] - 1), range[1]];
+      renderRange();
+    };
+    $('trim-end').onclick = () => {
+      range = [range[0], Math.max(video.currentTime, range[0] + 1)];
+      renderRange();
+    };
+    $('trim-reset').onclick = () => {
+      range = [0, video.duration];
+      renderRange();
+    };
     $('pick-cancel').onclick = () => finish(undefined);
     dlg.onclose = () => finish(undefined);
     seek.value = '0';
@@ -171,13 +199,13 @@ $('user-file').addEventListener('change', updateButtons);
 // ---------- お手本の登録 ----------
 $('model-add-btn').addEventListener('click', async () => {
   const file = $('model-file').files[0];
-  const target = await choosePerson(file);
-  if (target === undefined) return;
+  const pick = await choosePerson(file);
+  if (pick === undefined) return;
   const p = progress($('model-progress'));
   state.busy = true;
   updateButtons();
   try {
-    const pose = await extractPose(file, { target, onProgress: p.update });
+    const pose = await extractPose(file, { ...pick, onProgress: p.update });
     analyzeSession(pose); // 人物が取れているかの確認
     const id = crypto.randomUUID();
     await saveModel({ id, name: $('model-name').value.trim() || file.name, createdAt: Date.now(), video: file, pose });
@@ -199,14 +227,14 @@ $('model-add-btn').addEventListener('click', async () => {
 // ---------- 解析と比較 ----------
 $('analyze-btn').addEventListener('click', async () => {
   const file = $('user-file').files[0];
-  const target = await choosePerson(file);
-  if (target === undefined) return;
+  const pick = await choosePerson(file);
+  if (pick === undefined) return;
   const p = progress($('user-progress'));
   state.busy = true;
   updateButtons();
   try {
     const model = await getModel(state.selectedId);
-    const userPose = await extractPose(file, { target, onProgress: p.update });
+    const userPose = await extractPose(file, { ...pick, onProgress: p.update });
     p.update(1, '比較中…');
     const modelAna = analyzeSession(model.pose);
     const userAna = analyzeSession(userPose);

@@ -62,7 +62,7 @@ export function attachSkeleton(video, canvas, pose, isVisible) {
       ctx.restore();
     }
     if (f && f.status && f.status !== 'ok') {
-      const msg = f.status === 'small' ? '人物が小さすぎるため解析していません' : '人物が見つかりません';
+      const msg = { small: '人物が小さすぎるため解析していません', skip: '解析範囲外' }[f.status] ?? '人物が見つかりません';
       ctx.font = '600 13px system-ui, sans-serif';
       const tw = ctx.measureText(msg).width;
       ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';

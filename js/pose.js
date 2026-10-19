@@ -127,9 +127,9 @@ const roiFromBox = (b) => ({ cx: b.x + b.w / 2, cy: b.y + b.h / 2, size: Math.ma
 /**
  * @param {Blob} file 動画ファイル
  * @returns {Promise<{fps:number,duration:number,width:number,height:number,frames:{t:number,lm:number[][]|null,wl:number[][]|null,size:number,roi:number[]|null,status:string}[]}>}
- *   status: 'ok' | 'small'（人物が小さすぎる） | 'none'（人物が見つからない）
+ *   status: 'ok' | 'small'（人物が小さすぎる） | 'none'（人物が見つからない） | 'skip'（解析範囲外）
  */
-export async function extractPose(file, { fps = 15, target = null, onProgress = () => {} } = {}) {
+export async function extractPose(file, { fps = 15, target = null, range = null, onProgress = () => {} } = {}) {
   onProgress(0, 'AIモデルを読み込み中…');
   const { pose, detector } = await getModels();
 
@@ -151,7 +151,11 @@ export async function extractPose(file, { fps = 15, target = null, onProgress = 
     const W = video.videoWidth, H = video.videoHeight;
 
     const total = Math.floor(duration * fps);
-    const frames = new Array(total);
+    // 指定された範囲の外は解析しない（時間とコマ番号の対応を保つため、空のコマで埋めておく）
+    const first = range ? Math.max(0, Math.ceil(range[0] * fps)) : 0;
+    const last = range ? Math.min(total - 1, Math.floor(range[1] * fps)) : total - 1;
+    const frames = Array.from({ length: total }, (_, i) => ({ t: i / fps, lm: null, wl: null, size: 0, roi: null, status: 'skip' }));
+    const count = last - first + 1;
     let ts = tsBase;
     let done = 0;
 
@@ -211,18 +215,18 @@ export async function extractPose(file, { fps = 15, target = null, onProgress = 
       }
       frames[i] = frame;
       done++;
-      onProgress(done / total, `骨格を解析中… ${done} / ${total}`);
+      onProgress(done / count, `骨格を解析中… ${done} / ${count}`);
     };
 
     // 選んだ人物がいる場面から後ろへ、続いて前へさかのぼって追跡する
-    const start = target ? Math.min(total - 1, Math.max(0, Math.round(target.t * fps))) : 0;
+    const start = target ? Math.min(last, Math.max(first, Math.round(target.t * fps))) : first;
     const startRoi = () => (target
       ? roiFromBox({ x: target.box.x * W, y: target.box.y * H, w: target.box.w * W, h: target.box.h * H })
       : null);
     const forward = { roi: startRoi(), sinceDetect: target ? 0 : Infinity };
-    for (let i = start; i < total; i++) await step(i, forward);
+    for (let i = start; i <= last; i++) await step(i, forward);
     const backward = { roi: startRoi(), sinceDetect: 0 };
-    for (let i = start - 1; i >= 0; i--) await step(i, backward);
+    for (let i = start - 1; i >= first; i--) await step(i, backward);
     tsBase = ts + 1000;
     return { fps, duration, width: W, height: H, frames };
   } finally {
