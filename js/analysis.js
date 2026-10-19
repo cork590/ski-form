@@ -201,26 +201,28 @@ function resample(arr, n = N_POINTS) {
   });
 }
 
-// ターンの向き（右/左）をそろえて、外足・内足・外向などに読み替える
+// ターンの向き（右/左）をそろえて、外足・内足・外向などに読み替える（s: +1 = 右ターン）
+export function turnRelative(m, s) {
+  return {
+    inclination: m.legLateral * s,
+    angulation: (m.legLateral - m.torsoLateral) * s,
+    outsideKnee: s > 0 ? m.kneeFlexL : m.kneeFlexR,
+    insideKnee: s > 0 ? m.kneeFlexR : m.kneeFlexL,
+    hipFlex: m.hipFlex,
+    torsoForward: m.torsoForward,
+    foreAft: m.foreAft,
+    counterRot: m.shoulderRot * s,
+    stance: m.stance,
+    handsFwd: m.handsFwd,
+    handsHeight: m.handsHeight,
+  };
+}
+
 function turnSeries(raw, turn) {
-  const s = turn.sign; // +1 = 右ターン（右が内側）
   const out = {};
   for (const def of METRICS) out[def.key] = [];
   for (let i = turn.start; i <= turn.end; i++) {
-    const m = raw[i];
-    const v = {
-      inclination: m.legLateral * s,
-      angulation: (m.legLateral - m.torsoLateral) * s,
-      outsideKnee: s > 0 ? m.kneeFlexL : m.kneeFlexR,
-      insideKnee: s > 0 ? m.kneeFlexR : m.kneeFlexL,
-      hipFlex: m.hipFlex,
-      torsoForward: m.torsoForward,
-      foreAft: m.foreAft,
-      counterRot: m.shoulderRot * s,
-      stance: m.stance,
-      handsFwd: m.handsFwd,
-      handsHeight: m.handsHeight,
-    };
+    const v = turnRelative(raw[i], turn.sign);
     for (const def of METRICS) out[def.key].push(v[def.key]);
   }
   for (const k in out) out[k] = resample(out[k]);
@@ -318,6 +320,15 @@ export function analyzeSession(pose) {
     turns = [{ start: first, end: last, sign: Math.sign(mean(lateral.slice(first, last + 1))) || 1 }];
   }
 
+  // 体の向きが平均から大きく外れたコマ（左右の取り違えなど）は、1コマごとの表示に使わない
+  const cs = raw.reduce((a, m) => [a[0] + Math.sin(m.hipYaw / DEG), a[1] + Math.cos(m.hipYaw / DEG)], [0, 0]);
+  const canonYaw = Math.atan2(cs[0], cs[1]) * DEG;
+  const reliable = raw.map((m, i) => {
+    let d = m.hipYaw - canonYaw;
+    d -= Math.round(d / 360) * 360;
+    return valid[i] && Math.abs(d) < 75;
+  });
+
   const hipYaw = smooth1d(unwrap(raw.map((m) => m.hipYaw)), 7);
   const footYaw = smooth1d(unwrap(raw.map((m) => m.footYaw)), 7);
   const motions = fallback ? [] : turns.map((t) => estimateTurnMotion(t, lateral, hipYaw, footYaw, fps));
@@ -334,7 +345,7 @@ export function analyzeSession(pose) {
   }
   return {
     fps, raw, wl: smoothed, lateral, turns, profile, fallback, warnings, motion, validRatio,
-    cameraRoll, slope: pose.slope ?? null,
+    cameraRoll, slope: pose.slope ?? null, reliable,
     avgTurnDur: mean(turns.map((t) => (t.end - t.start) / fps)),
   };
 }

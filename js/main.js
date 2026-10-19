@@ -1,7 +1,7 @@
 import { listModels, getModel, saveModel, deleteModel } from './db.js';
 import { extractPose, findPeople } from './pose.js';
 import { fitCanvas, containRect } from './draw.js';
-import { analyzeSession, compare, METRICS, PHASES } from './analysis.js';
+import { analyzeSession, compare, METRICS, PHASES, turnRelative } from './analysis.js';
 import { attachSkeleton, drawProfileChart } from './draw.js';
 import { createViewer } from './viewer3d.js';
 import { IS_BETA, VERSION } from './config.js';
@@ -382,6 +382,40 @@ function renderResults({ model, modelAna, userFile, userPose, userAna, result })
   setupVideo($('model-video'), $('model-wrap'), model.video, model.pose);
   setupVideo($('user-video'), $('user-wrap'), userFile, userPose);
 
+  // 連動グラフ：人形の今の局面に合わせて、選んだ指標の値を表示する
+  const liveSel = $('live-metric');
+  liveSel.innerHTML = METRICS.map((d) => `<option value="${d.key}">${esc(d.label)}（${esc(d.unit)}）</option>`).join('');
+  liveSel.value = result.advice.find((a) => a.def.key)?.def.key ?? METRICS[0].key;
+  const profileAt = (series, phase) => {
+    const x = Math.min(1, Math.max(0, phase)) * (series.length - 1);
+    const a = Math.floor(x), b = Math.min(series.length - 1, a + 1);
+    return series[a] + (series[b] - series[a]) * (x - a);
+  };
+  // 今のコマの値：前後3コマの信頼できる値の中央値。なければ平均の推移の値を使う
+  const liveValue = (ana, idx, st, key) => {
+    if (idx != null && st.sign && !ana.fallback) {
+      const vals = [];
+      for (let j = Math.max(0, idx - 3); j <= Math.min(ana.raw.length - 1, idx + 3); j++) {
+        if (ana.reliable[j]) vals.push(turnRelative(ana.raw[j], st.sign)[key]);
+      }
+      if (vals.length >= 3) return vals.sort((a, b) => a - b)[Math.floor(vals.length / 2)];
+    }
+    return profileAt(ana.profile[key], st.phase);
+  };
+  let lastLive = null;
+  let lastVideoSync = 0;
+  const drawLive = (st = lastLive) => {
+    if (!st) return;
+    lastLive = st;
+    const def = METRICS.find((d) => d.key === liveSel.value);
+    const u = liveValue(userAna, st.ui, st, def.key);
+    const m = liveValue(modelAna, st.mi, st, def.key);
+    drawProfileChart($('live-chart'), def, modelAna.profile[def.key], userAna.profile[def.key], { phase: st.phase, user: u, model: m });
+    const diff = u - m;
+    $('live-values').innerHTML = `あなた <b>${u.toFixed(def.digits)}</b> ／ お手本 <b>${m.toFixed(def.digits)}</b> ${esc(def.unit)}（差 <b class="${Math.abs(diff) >= def.thr ? 'bad-text' : ''}">${fmt(diff, def.digits)}</b>）`;
+  };
+  liveSel.onchange = () => drawLive();
+
   // 同じ角度での人形比較
   const viewer = createViewer({
     canvas: $('viewer'), model: modelAna, user: userAna,
@@ -392,6 +426,19 @@ function renderResults({ model, modelAna, userFile, userPose, userAna, result })
       $('model-video').pause();
       $('user-video').currentTime = e.ui / userAna.fps;
       $('model-video').currentTime = e.mi / modelAna.fps;
+    },
+    onFrame: (st) => {
+      drawLive(st);
+      // 「実際の滑り」を再生中は、元の動画も同じ場面を追いかける（読み込み中は待つ）
+      const uv = $('user-video'), mv = $('model-video');
+      const now = performance.now();
+      if (st.playing && st.source === 'actual' && st.ui != null && now - lastVideoSync > 100 && !uv.seeking && !mv.seeking) {
+        lastVideoSync = now;
+        if (!uv.paused) uv.pause();
+        if (!mv.paused) mv.pause();
+        uv.currentTime = st.ui / userAna.fps;
+        mv.currentTime = st.mi / modelAna.fps;
+      }
     },
   });
   state.cleanups.push(() => viewer.destroy());
@@ -458,6 +505,14 @@ function renderResults({ model, modelAna, userFile, userPose, userAna, result })
     </div>`).join('');
   state.chartData = { model: modelAna.profile, user: userAna.profile };
   drawCharts();
+  // グラフをクリックすると、その指標を人形モデルと連動して表示する
+  $('charts').onclick = (e) => {
+    const card = e.target.closest('.chart');
+    if (!card) return;
+    liveSel.value = card.querySelector('canvas').dataset.key;
+    drawLive();
+    $('viewer').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
 
   $('results').scrollIntoView({ behavior: 'smooth' });
 }

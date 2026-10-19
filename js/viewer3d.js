@@ -240,7 +240,7 @@ function phaseName(p) {
   return (PHASES.find((ph) => p >= ph.a && p < ph.b) ?? PHASES[PHASES.length - 1]).name;
 }
 
-export function createViewer({ canvas, model, user, info, seek, playBtn, speedSel, onSeek }) {
+export function createViewer({ canvas, model, user, info, seek, playBtn, speedSel, onSeek, onFrame = () => {} }) {
   const modelPoses = prepare(model);
   const userPoses = prepare(user);
   const actualTimeline = buildTimeline(model, user);
@@ -307,6 +307,11 @@ export function createViewer({ canvas, model, user, info, seek, playBtn, speedSe
       ctx.fillText('あなた', 12, 28);
     }
 
+    onFrame({
+      source, playing, phase: e.phase, sign: e.sign, turn: e.turn,
+      ui: source === 'actual' ? Math.round(e.ui + (e1.ui - e.ui) * t) : null,
+      mi: source === 'actual' ? Math.round(Math.abs(e1.mi - e.mi) > 2 ? e.mi : e.mi + (e1.mi - e.mi) * t) : null,
+    });
     if (source === 'average') {
       const side = e.sign > 0 ? '右' : '左';
       const n = (c) => (c ? `${c}ターンの平均` : '反対側を左右反転');

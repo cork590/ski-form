@@ -98,7 +98,7 @@ export function attachSkeleton(video, canvas, pose, isVisible) {
 }
 
 /** ターン1回分（0〜100%）の推移を お手本 / あなた で重ねて描く */
-export function drawProfileChart(canvas, def, modelSeries, userSeries) {
+export function drawProfileChart(canvas, def, modelSeries, userSeries, live = null) {
   const { ctx, w, h } = fitCanvas(canvas);
   ctx.clearRect(0, 0, w, h);
   const pad = { l: 40, r: 10, t: 10, b: 22 };
@@ -149,4 +149,30 @@ export function drawProfileChart(canvas, def, modelSeries, userSeries) {
   };
   line(modelSeries, cssVar('--series-model'), 2);
   line(userSeries, cssVar('--series-user'), 2.5);
+
+  // 連動表示：今の局面の縦線と、今のコマの値（グラフの範囲外は端に寄せる）
+  if (live) {
+    const cx = pad.l + live.phase * pw;
+    ctx.strokeStyle = cssVar('--text');
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.moveTo(cx, pad.t);
+    ctx.lineTo(cx, pad.t + ph);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    const dot = (v, color) => {
+      if (v == null || !isFinite(v)) return;
+      const cy = Math.min(pad.t + ph, Math.max(pad.t, y(v)));
+      ctx.beginPath();
+      ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.strokeStyle = cssVar('--surface');
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    };
+    dot(live.model, cssVar('--series-model'));
+    dot(live.user, cssVar('--series-user'));
+  }
 }
