@@ -37,15 +37,24 @@ function prepare(ana) {
     sx += Math.sin(m.hipYaw * RAD);
     sz += -Math.cos(m.hipYaw * RAD);
   }
-  const align = -Math.atan2(sx, sz);
+  const canon = Math.atan2(sx, sz);
+  const align = -canon;
+  // 体の向きが平均から大きく外れたコマ（左右の取り違えなど）は、平均化で使わない
+  const reliable = ana.raw.map((m) => {
+    const yaw = Math.atan2(Math.sin(m.hipYaw * RAD), -Math.cos(m.hipYaw * RAD));
+    const d = Math.atan2(Math.sin(yaw - canon), Math.cos(yaw - canon));
+    return Math.abs(d) < 75 * RAD;
+  });
   const legs = ana.raw.map((m) => m.legLen).sort((a, b) => a - b);
   const scale = 1 / (legs[Math.floor(legs.length / 2)] || 1);
-  return ana.wl.map((w) => {
+  const poses = ana.wl.map((w) => {
     const pts = w.map((p) => rotY([p[0] * scale, -p[1] * scale, -p[2] * scale], align));
     const ank = mid(pts[LM.lAnk], pts[LM.rAnk]);
     const floor = Math.min(pts[LM.lAnk][1], pts[LM.rAnk][1]);
     return pts.map((p) => [p[0] - ank[0], p[1] - floor, p[2] - ank[2]]);
   });
+  poses.reliable = reliable;
+  return poses;
 }
 
 function poseAt(poses, fi) {
@@ -75,6 +84,58 @@ function buildTimeline(model, user) {
     for (let i = t.start; i < t.end; i++) {
       const p = (i - t.start) / n;
       entries.push({ ui: i, mi: mt.start + p * (mt.end - mt.start), turn: k, phase: p, sign: t.sign });
+    }
+  });
+  return entries;
+}
+
+// 平均化したターン1回分のコマ数
+const AVG_N = 48;
+// MediaPipe の左右対応（左右反転に使う）
+const SWAP = (() => {
+  const m = Array.from({ length: 33 }, (_, i) => i);
+  for (const [a, b] of [[1, 4], [2, 5], [3, 6], [7, 8], [9, 10], [11, 12], [13, 14], [15, 16], [17, 18],
+    [19, 20], [21, 22], [23, 24], [25, 26], [27, 28], [29, 30], [31, 32]]) { m[a] = b; m[b] = a; }
+  return m;
+})();
+const mirrorPose = (pose) => pose.map((_, k) => {
+  const p = pose[SWAP[k]];
+  return [-p[0], p[1], p[2]];
+});
+const lerpPose = (a, b, t) => a.map((p, k) => p.map((v, d) => v + (b[k][d] - v) * t));
+
+// 右ターン・左ターンをそれぞれ、同じ局面どうしで関節位置を平均する
+function averageTurns(poses, turns) {
+  const out = {};
+  for (const s of [1, -1]) {
+    const list = turns.filter((t) => t.sign === s);
+    if (!list.length) continue;
+    const seq = Array.from({ length: AVG_N }, (_, i) => {
+      const p = i / AVG_N;
+      const idx = list.map((t) => t.start + p * (t.end - t.start));
+      const good = idx.filter((fi) => poses.reliable[Math.round(fi)]);
+      const samples = (good.length ? good : idx).map((fi) => poseAt(poses, fi));
+      return samples[0].map((_, k) => [0, 1, 2].map((d) => samples.reduce((sum, smp) => sum + smp[k][d], 0) / samples.length));
+    });
+    out[s] = { count: list.length, seq };
+  }
+  // 片側のターンしかないときは、反対側を左右反転して補う
+  for (const s of [1, -1]) {
+    if (!out[s] && out[-s]) out[s] = { count: 0, seq: out[-s].seq.map(mirrorPose) };
+  }
+  return out;
+}
+
+// 平均した右・左ターンを交互に3ターン分並べる
+function buildAverageTimeline(model, user, modelPoses, userPoses) {
+  if (model.fallback || user.fallback) return null;
+  const mAvg = averageTurns(modelPoses, model.turns);
+  const uAvg = averageTurns(userPoses, user.turns);
+  const first = user.turns[0].sign;
+  const entries = [];
+  [first, -first, first].forEach((sign, k) => {
+    for (let i = 0; i < AVG_N; i++) {
+      entries.push({ m: mAvg[sign].seq[i], u: uAvg[sign].seq[i], sign, phase: i / AVG_N, turn: k, mCount: mAvg[sign].count, uCount: uAvg[sign].count });
     }
   });
   return entries;
@@ -182,7 +243,10 @@ function phaseName(p) {
 export function createViewer({ canvas, model, user, info, seek, playBtn, speedSel, onSeek }) {
   const modelPoses = prepare(model);
   const userPoses = prepare(user);
-  const timeline = buildTimeline(model, user);
+  const actualTimeline = buildTimeline(model, user);
+  const averageTimeline = buildAverageTimeline(model, user, modelPoses, userPoses);
+  let source = 'actual';
+  let timeline = actualTimeline;
   const view = { yaw: 0, pitch: 8 * RAD };
   let mode = 'side';
   let pos = 0;
@@ -193,7 +257,7 @@ export function createViewer({ canvas, model, user, info, seek, playBtn, speedSe
   const setPlaying = (v) => {
     playing = v;
     playBtn.textContent = v ? '❚❚ 一時停止' : '▶ 再生';
-    if (!v) onSeek(timeline[Math.round(pos)]);
+    if (!v && source === 'actual') onSeek(timeline[Math.round(pos)]);
   };
 
   function draw() {
@@ -204,9 +268,15 @@ export function createViewer({ canvas, model, user, info, seek, playBtn, speedSe
     const i0 = Math.min(timeline.length - 1, Math.floor(pos));
     const e = timeline[i0], e1 = timeline[Math.min(timeline.length - 1, i0 + 1)];
     const t = pos - i0;
-    const lerp = (a, b) => (Math.abs(b - a) > 2 ? a : a + (b - a) * t);
-    const mPose = poseAt(modelPoses, lerp(e.mi, e1.mi));
-    const uPose = poseAt(userPoses, lerp(e.ui, e1.ui));
+    let mPose, uPose;
+    if (source === 'average') {
+      mPose = lerpPose(e.m, e1.m, t);
+      uPose = lerpPose(e.u, e1.u, t);
+    } else {
+      const lerp = (a, b) => (Math.abs(b - a) > 2 ? a : a + (b - a) * t);
+      mPose = poseAt(modelPoses, lerp(e.mi, e1.mi));
+      uPose = poseAt(userPoses, lerp(e.ui, e1.ui));
+    }
     const k = Math.min(h / 2.9, (mode === 'side' ? w / 2 : w) / 3.2);
     const cModel = cssVar('--series-model'), cUser = cssVar('--series-user');
 
@@ -237,6 +307,12 @@ export function createViewer({ canvas, model, user, info, seek, playBtn, speedSe
       ctx.fillText('あなた', 12, 28);
     }
 
+    if (source === 'average') {
+      const side = e.sign > 0 ? '右' : '左';
+      const n = (c) => (c ? `${c}ターンの平均` : '反対側を左右反転');
+      info.textContent = `平均した${side}ターン（あなた：${n(e.uCount)}／お手本：${n(e.mCount)}）・ ${phaseName(e.phase)}`;
+      return;
+    }
     info.textContent = e.turn >= 0
       ? `ターン ${e.turn + 1} / ${user.turns.length}（${e.sign > 0 ? '右' : '左'}ターン）・ ${phaseName(e.phase)}`
       : `動画全体の ${Math.round(e.phase * 100)}%`;
@@ -245,7 +321,9 @@ export function createViewer({ canvas, model, user, info, seek, playBtn, speedSe
   function frame(ts) {
     raf = requestAnimationFrame(frame);
     if (playing && lastTs) {
-      pos += ((ts - lastTs) / 1000) * user.fps * Number(speedSel.value);
+      // 平均表示では、1ターンをあなたの平均ターン時間で再生する
+      const rate = source === 'average' ? AVG_N / (user.avgTurnDur || 1) : user.fps;
+      pos += ((ts - lastTs) / 1000) * rate * Number(speedSel.value);
       if (pos >= timeline.length - 1) pos = 0;
       seek.value = String(Math.round((pos / Math.max(1, timeline.length - 1)) * 1000));
     }
@@ -257,7 +335,7 @@ export function createViewer({ canvas, model, user, info, seek, playBtn, speedSe
   const onInput = () => {
     pos = (Number(seek.value) / 1000) * (timeline.length - 1);
     if (playing) setPlaying(false);
-    else onSeek(timeline[Math.round(pos)]);
+    else if (source === 'actual') onSeek(timeline[Math.round(pos)]);
   };
   let drag = null;
   const onDown = (e) => {
@@ -286,6 +364,14 @@ export function createViewer({ canvas, model, user, info, seek, playBtn, speedSe
       view.pitch = VIEWS[name].pitch * RAD;
     },
     setMode(m) { mode = m; },
+    canAverage: !!averageTimeline,
+    setSource(s) {
+      if (s === 'average' && !averageTimeline) return;
+      source = s;
+      timeline = s === 'average' ? averageTimeline : actualTimeline;
+      pos = 0;
+      seek.value = '0';
+    },
     destroy() {
       cancelAnimationFrame(raf);
       playBtn.removeEventListener('click', onPlay);

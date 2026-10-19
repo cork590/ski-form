@@ -48,10 +48,13 @@
       <div class="summary" id="summary"></div>
 
       <h3>同じ角度で比較（人形モデル）</h3>
-      <p class="hint">2本の動画の骨格を体の向きでそろえ、ターンの局面を合わせて再生します。ドラッグで視点を自由に回せます。一時停止やシークをすると、下の元動画も同じ場面に移動します。</p>
+      <p class="hint">2本の動画の骨格を体の向きでそろえ、ターンの局面を合わせて再生します。ドラッグで視点を自由に回せます。「平均（3ターン）」では、右ターンと左ターンをそれぞれ平均して、滑りのクセだけを取り出して表示します。一時停止やシークをすると、下の元動画も同じ場面に移動します。</p>
       <div class="viewer-controls">
         <div class="seg" id="view-buttons">
           <button data-view="front" class="active">正面</button><button data-view="diag">斜め</button><button data-view="side">横</button><button data-view="back">後ろ</button><button data-view="top">上</button>
+        </div>
+        <div class="seg" id="source-buttons">
+          <button data-source="actual" class="active">実際の滑り</button><button data-source="average">平均（3ターン）</button>
         </div>
         <div class="seg" id="mode-buttons">
           <button data-mode="side" class="active">並べて</button><button data-mode="overlay">重ねて</button>

@@ -190,6 +190,9 @@ function renderResults({ model, modelAna, userFile, userPose, userAna, result })
   };
   segment('view-buttons', 'view', (v) => viewer.setView(v));
   segment('mode-buttons', 'mode', (m) => viewer.setMode(m));
+  segment('source-buttons', 'source', (s) => viewer.setSource(s));
+  $('source-buttons').querySelector('[data-source="average"]').disabled = !viewer.canAverage;
+  $('source-buttons').querySelector('[data-source="actual"]').click();
   $('view-buttons').querySelector('[data-view="front"]').click();
   $('mode-buttons').querySelector('[data-mode="side"]').click();
 
