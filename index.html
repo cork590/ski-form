@@ -25,6 +25,7 @@
           <label class="field">名前
             <input type="text" id="model-name" placeholder="例：大回り・デモンストレーター">
           </label>
+          <p class="hint">お手本には、上手な人の滑りが大きく、全身が映っている動画を選んでください。注意点は下の「撮影・アップロードの注意」と同じです。他の人が撮影した動画を使う場合は、撮影者と滑っている人の許可を得てください。</p>
           <input type="file" id="model-file" accept="video/*">
           <button id="model-add-btn" class="btn primary" disabled>登録して解析</button>
           <div class="progress hidden" id="model-progress"><progress max="1" value="0"></progress><span></span></div>
@@ -34,7 +35,17 @@
 
     <section class="card">
       <h2><span class="step">2</span>あなたの滑りをアップロード</h2>
-      <p class="hint">撮影のコツ：全身が大きめに映るように撮影してください。正面〜斜め前からがおすすめです。2ターン以上入っていると精度が上がります。</p>
+      <details class="tips" open>
+        <summary>撮影・アップロードの注意</summary>
+        <ul>
+          <li><b>人物を大きく</b>：解析したい人が画面の高さの1/5以上になるように、ズームして撮りましょう。遠くて小さい場面は解析できません。</li>
+          <li><b>全身を入れる</b>：頭から板の先まで映るように。木や他の人で体が隠れると精度が下がります。</li>
+          <li><b>手ブレを抑える</b>：両手でしっかり持ち、脇を締めて構えます。滑る人を追うときは、ゆっくり滑らかにカメラを動かしましょう。</li>
+          <li><b>カメラは水平に</b>：傾けずに構えます（多少の傾きは自動で補正します）。</li>
+          <li><b>2ターン以上</b>：連続したターンが映っていると、比較の精度が上がります。</li>
+          <li><b>位置情報をオンに</b>：撮影時にカメラの位置情報をオンにしておくと、斜度を自動で取得できます。LINEやSNS経由で保存した動画は、位置情報が消えていることがあります。</li>
+        </ul>
+      </details>
       <div class="form">
         <input type="file" id="user-file" accept="video/*">
         <button id="analyze-btn" class="btn primary" disabled>解析して比較</button>
@@ -101,18 +112,17 @@
   </main>
 
   <dialog id="pick-dialog" class="pick-dialog">
-    <h2>解析する範囲と人を選んでください</h2>
-    <p class="hint">① スライダーで動画を動かし、比べたい区間の始めと終わりで「ここを開始に」「ここを終了に」を押します（全体を使うなら不要です）。<br>② 解析したい人が大きく映っている場面で、その人の枠をクリックします。</p>
+    <ol class="pick-steps" id="pick-steps">
+      <li data-step="1">開始の場面</li><li data-step="2">終了の場面</li><li data-step="3">解析する人</li>
+    </ol>
+    <h2 id="pick-title"></h2>
+    <p class="hint" id="pick-hint"></p>
     <div class="video-wrap pick-wrap" id="pick-wrap"><video id="pick-video" muted playsinline preload="auto"></video><canvas id="pick-canvas"></canvas></div>
     <div class="trim-track"><div class="trim-range" id="trim-range"></div></div>
     <input type="range" id="pick-seek" min="0" max="1000" value="0">
-    <div class="trim-controls">
-      <button id="trim-start" class="btn small">ここを開始に</button>
-      <span id="trim-label" class="trim-label"></span>
-      <button id="trim-end" class="btn small">ここを終了に</button>
-      <button id="trim-reset" class="btn small">全体に戻す</button>
-    </div>
-    <label class="field slope-field">撮影した場所の斜度
+    <div class="trim-label" id="trim-label"></div>
+    <p class="pick-status" id="pick-status"></p>
+    <label class="field slope-field" id="pick-slope-field">撮影した場所の斜度
       <select id="pick-slope">
         <option value="auto">自動（動画の位置情報から取得）</option>
         <option value="gentle">緩斜面（約10°）</option>
@@ -121,10 +131,10 @@
       </select>
       <span class="slope-note">自動の場合、撮影地点の緯度・経度を標高データのサービス（国土地理院など）に送って斜度を計算します。動画そのものは送りません。</span>
     </label>
-    <p class="pick-status" id="pick-status">読み込み中…</p>
     <div class="pick-actions">
-      <button id="pick-auto" class="btn">自動で選ぶ</button>
       <button id="pick-cancel" class="btn">キャンセル</button>
+      <button id="pick-back" class="btn">← 戻る</button>
+      <button id="pick-next" class="btn primary"></button>
     </div>
   </dialog>
 

@@ -61,86 +61,173 @@ $('model-list').addEventListener('click', async (e) => {
   renderModelList();
 });
 
-// ---------- 解析する人を選ぶ ----------
+// ---------- 解析する範囲と人を選ぶ（3ステップ） ----------
 // 戻り値: { target: { t, box } | null（自動で選ぶ）, range: [開始秒, 終了秒], slopeChoice }／ undefined（キャンセル）
+const PICK_STEPS = {
+  1: {
+    title: '解析を始める場面を選んでください',
+    hint: 'スライダーを動かして、比べたい滑りが始まる場面に合わせ、「ここから解析」を押してください。動画の最初から使う場合は、そのまま押して大丈夫です。',
+    next: 'ここから解析 →',
+  },
+  2: {
+    title: '解析を終える場面を選んでください',
+    hint: 'スライダーを動かして、比べたい滑りが終わる場面に合わせ、「ここまで解析」を押してください。最後まで使う場合は、そのまま押して大丈夫です。',
+    next: 'ここまで解析 →',
+  },
+  3: {
+    title: '解析する人を選んでください',
+    hint: 'スライダーで、解析したい人が大きく映っている場面に動かしてください。黄色い枠が、見つかった人です。',
+    next: '解析を開始',
+  },
+};
+
 function choosePerson(file) {
   return new Promise((resolve) => {
     const dlg = $('pick-dialog'), video = $('pick-video'), canvas = $('pick-canvas');
-    const seek = $('pick-seek'), status = $('pick-status');
+    const seek = $('pick-seek'), status = $('pick-status'), next = $('pick-next');
     const url = URL.createObjectURL(file);
-    let boxes = [];
-    let busy = false, pending = false;
+    let step = 1;
     let range = [0, 0];
+    let boxes = [];
+    let selected = null; // { t, box }
+    let busy = false, pending = false;
+
+    // スライダーの動かせる範囲：ステップ1・2は動画全体、ステップ3は選んだ範囲の中だけ
+    const span = () => (step === 3 ? range : [0, video.duration || 0]);
+    const setSlider = (t) => {
+      const [a, b] = span();
+      seek.value = String(Math.round(((t - a) / ((b - a) || 1)) * 1000));
+    };
+    const onSeek = () => {
+      const [a, b] = span();
+      video.currentTime = a + (Number(seek.value) / 1000) * (b - a);
+    };
+
     const renderRange = () => {
       const d = video.duration || 1;
-      $('trim-range').style.left = `${(range[0] / d) * 100}%`;
-      $('trim-range').style.width = `${((range[1] - range[0]) / d) * 100}%`;
-      const whole = range[0] <= 0.05 && range[1] >= d - 0.05;
-      $('trim-label').textContent = `解析範囲：${range[0].toFixed(1)}〜${range[1].toFixed(1)}秒${whole ? '（全体）' : `（${(range[1] - range[0]).toFixed(1)}秒間）`}`;
+      const [a, b] = step === 1 ? [video.currentTime, d] : step === 2 ? [range[0], video.currentTime] : range;
+      $('trim-range').style.left = `${(a / d) * 100}%`;
+      $('trim-range').style.width = `${(Math.max(0, b - a) / d) * 100}%`;
+      $('trim-label').textContent = `解析範囲：${a.toFixed(1)}〜${b.toFixed(1)}秒（${Math.max(0, b - a).toFixed(1)}秒間）・ 現在 ${video.currentTime.toFixed(1)}秒`;
     };
 
     const draw = () => {
       const { ctx, w: cw, h: ch } = fitCanvas(canvas);
       ctx.clearRect(0, 0, cw, ch);
-      if (!video.videoWidth) return;
+      if (step !== 3 || !video.videoWidth) return;
       const r = containRect(cw, ch, video.videoWidth, video.videoHeight);
       ctx.translate(r.x, r.y);
       const w = r.w, h = r.h;
-      ctx.lineWidth = 2;
       ctx.font = '600 13px system-ui, sans-serif';
       boxes.forEach((b, i) => {
-        ctx.strokeStyle = '#ffd400';
+        const isSel = selected && selected.box === b;
+        ctx.lineWidth = isSel ? 3 : 2;
+        ctx.strokeStyle = isSel ? '#2f9e7a' : '#ffd400';
         ctx.strokeRect(b.x * w, b.y * h, b.w * w, b.h * h);
-        ctx.fillStyle = '#ffd400';
-        ctx.fillRect(b.x * w, b.y * h - 18, 22, 18);
-        ctx.fillStyle = '#000';
-        ctx.fillText(String(i + 1), b.x * w + 6, b.y * h - 4);
+        ctx.fillStyle = ctx.strokeStyle;
+        const label = isSel ? `${i + 1} ✓` : String(i + 1);
+        ctx.fillRect(b.x * w, b.y * h - 18, ctx.measureText(label).width + 12, 18);
+        ctx.fillStyle = isSel ? '#fff' : '#000';
+        ctx.fillText(label, b.x * w + 6, b.y * h - 4);
       });
     };
+
+    const updateNext = () => {
+      next.disabled = step === 3 && !selected;
+    };
+
     const refresh = async () => {
+      renderRange();
+      if (step !== 3) { draw(); return; }
       if (busy) { pending = true; return; }
       busy = true;
-      status.textContent = '人物を探しています…（初回はAIモデルの読み込みに時間がかかります）';
+      status.textContent = '人を探しています…（初回はAIモデルの読み込みに時間がかかります）';
       try {
         boxes = await findPeople(video);
       } catch (err) {
         boxes = [];
-        status.textContent = `人物を探せませんでした：${err.message}`;
+        status.textContent = `人を探せませんでした：${err.message}`;
       }
+      // 場面を動かしたら選び直し。1人だけなら自動で選んでおく
+      selected = boxes.length === 1 ? { t: video.currentTime, box: boxes[0] } : null;
+      if (boxes.length === 1) status.textContent = 'この人を解析します（緑の枠）。よければ「解析を開始」を押してください。';
+      else if (boxes.length > 1) status.textContent = `${boxes.length}人映っています。解析したい人の枠をタップしてください。`;
+      else if (!status.textContent.startsWith('人を探せません')) status.textContent = 'この場面では人が見つかりません。スライダーで、人が大きく映っている場面に動かしてください。';
       draw();
-      if (boxes.length) status.textContent = `${boxes.length}人見つかりました。解析する人の枠をクリックしてください。`;
-      else if (!status.textContent.startsWith('人物を探せません')) status.textContent = 'この場面では人物が見つかりません。スライダーで別の場面に動かしてください。';
+      updateNext();
       window.__pick = { boxes, t: video.currentTime }; // 動作確認用
       busy = false;
       if (pending) { pending = false; refresh(); }
     };
-    const onLoaded = () => {
-      $('pick-wrap').style.aspectRatio = `${video.videoWidth} / ${video.videoHeight}`;
-      range = [0, video.duration];
-      renderRange();
-      video.currentTime = Math.min(video.duration / 2, 0.1);
+
+    const showStep = (n) => {
+      step = n;
+      const def = PICK_STEPS[n];
+      $('pick-title').textContent = def.title;
+      $('pick-hint').textContent = def.hint;
+      next.textContent = def.next;
+      $('pick-back').hidden = n === 1;
+      $('pick-slope-field').hidden = n !== 3;
+      $('pick-steps').querySelectorAll('li').forEach((li) => {
+        const k = Number(li.dataset.step);
+        li.classList.toggle('active', k === n);
+        li.classList.toggle('done', k < n);
+      });
+      status.textContent = '';
+      boxes = [];
+      selected = null;
+      // それぞれのステップで、最初に表示する場面
+      const t = n === 1 ? range[0] : n === 2 ? range[1] : (range[0] + range[1]) / 2;
+      video.currentTime = Math.min(Math.max(0, t), Math.max(0, (video.duration || 0) - 0.05));
+      setSlider(video.currentTime);
+      updateNext();
+      draw();
     };
-    const onSeek = () => { video.currentTime = (Number(seek.value) / 1000) * (video.duration || 0); };
+
+    const onNext = () => {
+      if (step === 1) {
+        if (video.currentTime > video.duration - 1) {
+          status.textContent = '開始の場面が動画の最後に近すぎます。もう少し前の場面を選んでください。';
+          return;
+        }
+        range = [video.currentTime, Math.max(range[1], video.currentTime + 1)];
+        showStep(2);
+      } else if (step === 2) {
+        if (video.currentTime < range[0] + 1) {
+          status.textContent = `終了の場面は、開始（${range[0].toFixed(1)}秒）より1秒以上あとにしてください。`;
+          return;
+        }
+        range = [range[0], video.currentTime];
+        showStep(3);
+      } else if (selected) {
+        finish({ target: selected, range, slopeChoice: $('pick-slope').value });
+      }
+    };
+    const onBack = () => showStep(step - 1);
     const onClick = (e) => {
+      if (step !== 3) return;
       const rect = canvas.getBoundingClientRect();
       const r = containRect(rect.width, rect.height, video.videoWidth, video.videoHeight);
       const x = (e.clientX - rect.left - r.x) / r.w, y = (e.clientY - rect.top - r.y) / r.h;
       const hit = boxes.filter((b) => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h)
         .sort((a, b) => a.w * a.h - b.w * b.h)[0];
       if (!hit) return;
-      if (video.currentTime < range[0] || video.currentTime > range[1]) {
-        status.textContent = '解析範囲の外の場面です。範囲の中の場面で人を選んでください。';
-        return;
-      }
-      finish({ target: { t: video.currentTime, box: hit }, range, slopeChoice: $('pick-slope').value });
+      selected = { t: video.currentTime, box: hit };
+      status.textContent = `${boxes.indexOf(hit) + 1}番の人を選びました（緑の枠）。よければ「解析を開始」を押してください。`;
+      draw();
+      updateNext();
+    };
+    const onLoaded = () => {
+      $('pick-wrap').style.aspectRatio = `${video.videoWidth} / ${video.videoHeight}`;
+      range = [0, video.duration];
+      showStep(1);
     };
     const finish = (value) => {
       video.removeEventListener('loadeddata', onLoaded);
       video.removeEventListener('seeked', refresh);
       seek.removeEventListener('input', onSeek);
       canvas.removeEventListener('click', onClick);
-      $('pick-auto').onclick = $('pick-cancel').onclick = null;
-      $('trim-start').onclick = $('trim-end').onclick = $('trim-reset').onclick = null;
+      next.onclick = $('pick-back').onclick = $('pick-cancel').onclick = null;
       dlg.onclose = null;
       dlg.close();
       video.removeAttribute('src');
@@ -153,24 +240,14 @@ function choosePerson(file) {
     video.addEventListener('seeked', refresh);
     seek.addEventListener('input', onSeek);
     canvas.addEventListener('click', onClick);
-    $('pick-auto').onclick = () => finish({ target: null, range, slopeChoice: $('pick-slope').value });
-    $('trim-start').onclick = () => {
-      range = [Math.min(video.currentTime, range[1] - 1), range[1]];
-      renderRange();
-    };
-    $('trim-end').onclick = () => {
-      range = [range[0], Math.max(video.currentTime, range[0] + 1)];
-      renderRange();
-    };
-    $('trim-reset').onclick = () => {
-      range = [0, video.duration];
-      renderRange();
-    };
+    next.onclick = onNext;
+    $('pick-back').onclick = onBack;
     $('pick-cancel').onclick = () => finish(undefined);
     dlg.onclose = () => finish(undefined);
-    seek.value = '0';
-    boxes = [];
-    draw();
+    $('pick-title').textContent = '動画を読み込んでいます…';
+    $('pick-hint').textContent = '';
+    status.textContent = '';
+    next.disabled = true;
     video.src = url;
     dlg.showModal();
   });
