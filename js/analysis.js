@@ -139,6 +139,23 @@ export function detectTurns(sig, fps, thr = 4, minDur = 0.4) {
   return turns;
 }
 
+// 人物が小さすぎたコマの割合と、その時間帯（1秒以上続いたもの）
+function frameQuality(frames, fps) {
+  const small = frames.map((f) => f.status === 'small');
+  const ranges = [];
+  for (let i = 0; i < small.length;) {
+    if (!small[i]) { i++; continue; }
+    let j = i;
+    while (j + 1 < small.length && small[j + 1]) j++;
+    if ((j - i + 1) / fps >= 1) ranges.push(`${(i / fps).toFixed(1)}〜${(j / fps).toFixed(1)}秒`);
+    i = j + 1;
+  }
+  return {
+    smallRatio: small.filter(Boolean).length / (frames.length || 1),
+    smallRanges: ranges.slice(0, 3).join('、') || '短い区間が点在',
+  };
+}
+
 const N_POINTS = 41;
 const G = 9.81;
 
@@ -216,19 +233,35 @@ export function analyzeSession(pose) {
   const validRatio = frames.filter((f) => f.wl).length / (frames.length || 1);
   const wl = fillGaps(frames, 'wl');
   if (!wl) throw new Error('動画から人物を検出できませんでした。全身が映っている動画を使ってください。');
+  const quality = frameQuality(frames, fps);
+  if (quality.smallRatio > 0.15) {
+    warnings.push(`人物が小さすぎて解析できないコマが ${Math.round(quality.smallRatio * 100)}% ありました（${quality.smallRanges}）。ズームして、人物が画面の高さの1/5以上になるように撮ると精度が上がります。`);
+  }
   if (validRatio < 0.6) {
-    warnings.push(`骨格を検出できたフレームが ${Math.round(validRatio * 100)}% と少なめです。結果の精度が下がっている可能性があります。`);
+    warnings.push(`骨格を検出できたコマは全体の ${Math.round(validRatio * 100)}% でした。検出できた区間だけで比較しています。`);
   }
 
   const smoothed = smoothSeq(wl, 5);
   const raw = smoothed.map(frameMetrics);
   const lateral = smooth1d(raw.map((m) => m.legLateral), 7);
-  let turns = detectTurns(lateral, fps);
+  // 骨格を検出できなかった区間（補間しただけのコマ）が多いターンは使わない
+  const valid = frames.map((f) => !!f.wl);
+  const detected = detectTurns(lateral, fps);
+  let turns = detected.filter((t) => {
+    let n = 0;
+    for (let i = t.start; i <= t.end; i++) n += valid[i] ? 1 : 0;
+    return n / (t.end - t.start + 1) >= 0.7;
+  });
+  if (detected.length > turns.length) {
+    warnings.push(`検出した ${detected.length} ターンのうち、骨格がうまく取れなかった ${detected.length - turns.length} ターンは比較から外しました。`);
+  }
   let fallback = false;
   if (!turns.length) {
     fallback = true;
     warnings.push('ターンの切り替えを検出できなかったため、動画全体を1区間として比較しています。2ターン以上映っている動画だと精度が上がります。');
-    turns = [{ start: 0, end: raw.length - 1, sign: Math.sign(mean(lateral)) || 1 }];
+    const first = Math.max(0, valid.indexOf(true));
+    const last = Math.max(first, valid.lastIndexOf(true));
+    turns = [{ start: first, end: last, sign: Math.sign(mean(lateral.slice(first, last + 1))) || 1 }];
   }
 
   const hipYaw = smooth1d(unwrap(raw.map((m) => m.hipYaw)), 7);
@@ -246,7 +279,7 @@ export function analyzeSession(pose) {
     profile[def.key] = Array.from({ length: N_POINTS }, (_, i) => mean(cycles.map((c) => c[def.key][i])));
   }
   return {
-    fps, raw, wl: smoothed, lateral, turns, profile, fallback, warnings, motion,
+    fps, raw, wl: smoothed, lateral, turns, profile, fallback, warnings, motion, validRatio,
     avgTurnDur: mean(turns.map((t) => (t.end - t.start) / fps)),
   };
 }

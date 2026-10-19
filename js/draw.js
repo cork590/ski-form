@@ -23,6 +23,16 @@ export function fitCanvas(canvas) {
   return { ctx, w, h };
 }
 
+/**
+ * 枠の中に動画が縦横比を保って表示されている範囲（object-fit: contain と同じ計算）。
+ * 画面の高さで動画が縮んでも、骨格や枠が動画とずれないようにする。
+ */
+export function containRect(w, h, vw, vh) {
+  const s = Math.min(w / vw, h / vh);
+  const dw = vw * s, dh = vh * s;
+  return { x: (w - dw) / 2, y: (h - dh) / 2, w: dw, h: dh };
+}
+
 /** 動画の再生位置に合わせて骨格を描き続ける。戻り値を呼ぶと停止。 */
 export function attachSkeleton(video, canvas, pose, isVisible) {
   let raf = 0;
@@ -33,12 +43,36 @@ export function attachSkeleton(video, canvas, pose, isVisible) {
     const key = visible ? video.currentTime : -2;
     if (key === last && canvas.width) return;
     last = key;
-    const { ctx, w, h } = fitCanvas(canvas);
-    ctx.clearRect(0, 0, w, h);
+    const { ctx, w: cw, h: ch } = fitCanvas(canvas);
+    ctx.clearRect(0, 0, cw, ch);
     if (!visible) return;
+    const r = containRect(cw, ch, pose.width, pose.height);
+    ctx.save();
+    ctx.translate(r.x, r.y);
+    const w = r.w, h = r.h;
     const i = Math.min(pose.frames.length - 1, Math.max(0, Math.round(video.currentTime * pose.fps)));
-    const lm = pose.frames[i]?.lm;
-    if (!lm) return;
+    const f = pose.frames[i];
+    if (f?.roi) {
+      // 自動ズームで切り出した範囲
+      ctx.save();
+      ctx.setLineDash([6, 4]);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(f.roi[0] * w, f.roi[1] * h, f.roi[2] * w, f.roi[3] * h);
+      ctx.restore();
+    }
+    if (f && f.status && f.status !== 'ok') {
+      const msg = f.status === 'small' ? '人物が小さすぎるため解析していません' : '人物が見つかりません';
+      ctx.font = '600 13px system-ui, sans-serif';
+      const tw = ctx.measureText(msg).width;
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+      ctx.fillRect(8, 8, tw + 16, 26);
+      ctx.fillStyle = '#ffffff';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(msg, 16, 21);
+    }
+    const lm = f?.lm;
+    if (!lm) { ctx.restore(); return; }
     const left = cssVar('--bone-left'), right = cssVar('--bone-right');
     ctx.lineWidth = 3;
     ctx.lineCap = 'round';
@@ -57,6 +91,7 @@ export function attachSkeleton(video, canvas, pose, isVisible) {
       ctx.arc(lm[k][0] * w, lm[k][1] * h, 3, 0, Math.PI * 2);
       ctx.fill();
     }
+    ctx.restore();
   };
   loop();
   return () => cancelAnimationFrame(raf);

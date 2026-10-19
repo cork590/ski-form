@@ -1,5 +1,6 @@
 import { listModels, getModel, saveModel, deleteModel } from './db.js';
-import { extractPose } from './pose.js';
+import { extractPose, findPeople } from './pose.js';
+import { fitCanvas, containRect } from './draw.js';
 import { analyzeSession, compare, METRICS, PHASES } from './analysis.js';
 import { attachSkeleton, drawProfileChart } from './draw.js';
 import { createViewer } from './viewer3d.js';
@@ -59,6 +60,93 @@ $('model-list').addEventListener('click', async (e) => {
   renderModelList();
 });
 
+// ---------- 解析する人を選ぶ ----------
+// 戻り値: { t, box }（選んだ人）／ null（自動で選ぶ）／ undefined（キャンセル）
+function choosePerson(file) {
+  return new Promise((resolve) => {
+    const dlg = $('pick-dialog'), video = $('pick-video'), canvas = $('pick-canvas');
+    const seek = $('pick-seek'), status = $('pick-status');
+    const url = URL.createObjectURL(file);
+    let boxes = [];
+    let busy = false, pending = false;
+
+    const draw = () => {
+      const { ctx, w: cw, h: ch } = fitCanvas(canvas);
+      ctx.clearRect(0, 0, cw, ch);
+      if (!video.videoWidth) return;
+      const r = containRect(cw, ch, video.videoWidth, video.videoHeight);
+      ctx.translate(r.x, r.y);
+      const w = r.w, h = r.h;
+      ctx.lineWidth = 2;
+      ctx.font = '600 13px system-ui, sans-serif';
+      boxes.forEach((b, i) => {
+        ctx.strokeStyle = '#ffd400';
+        ctx.strokeRect(b.x * w, b.y * h, b.w * w, b.h * h);
+        ctx.fillStyle = '#ffd400';
+        ctx.fillRect(b.x * w, b.y * h - 18, 22, 18);
+        ctx.fillStyle = '#000';
+        ctx.fillText(String(i + 1), b.x * w + 6, b.y * h - 4);
+      });
+    };
+    const refresh = async () => {
+      if (busy) { pending = true; return; }
+      busy = true;
+      status.textContent = '人物を探しています…（初回はAIモデルの読み込みに時間がかかります）';
+      try {
+        boxes = await findPeople(video);
+      } catch (err) {
+        boxes = [];
+        status.textContent = `人物を探せませんでした：${err.message}`;
+      }
+      draw();
+      if (boxes.length) status.textContent = `${boxes.length}人見つかりました。解析する人の枠をクリックしてください。`;
+      else if (!status.textContent.startsWith('人物を探せません')) status.textContent = 'この場面では人物が見つかりません。スライダーで別の場面に動かしてください。';
+      window.__pick = { boxes, t: video.currentTime }; // 動作確認用
+      busy = false;
+      if (pending) { pending = false; refresh(); }
+    };
+    const onLoaded = () => {
+      $('pick-wrap').style.aspectRatio = `${video.videoWidth} / ${video.videoHeight}`;
+      video.currentTime = Math.min(video.duration / 2, 0.1);
+    };
+    const onSeek = () => { video.currentTime = (Number(seek.value) / 1000) * (video.duration || 0); };
+    const onClick = (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const r = containRect(rect.width, rect.height, video.videoWidth, video.videoHeight);
+      const x = (e.clientX - rect.left - r.x) / r.w, y = (e.clientY - rect.top - r.y) / r.h;
+      const hit = boxes.filter((b) => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h)
+        .sort((a, b) => a.w * a.h - b.w * b.h)[0];
+      if (hit) finish({ t: video.currentTime, box: hit });
+    };
+    const finish = (value) => {
+      video.removeEventListener('loadeddata', onLoaded);
+      video.removeEventListener('seeked', refresh);
+      seek.removeEventListener('input', onSeek);
+      canvas.removeEventListener('click', onClick);
+      $('pick-auto').onclick = $('pick-cancel').onclick = null;
+      dlg.onclose = null;
+      dlg.close();
+      video.removeAttribute('src');
+      video.load();
+      URL.revokeObjectURL(url);
+      resolve(value);
+    };
+
+    video.addEventListener('loadeddata', onLoaded);
+    video.addEventListener('seeked', refresh);
+    seek.addEventListener('input', onSeek);
+    canvas.addEventListener('click', onClick);
+    $('pick-auto').onclick = () => finish(null);
+    $('pick-cancel').onclick = () => finish(undefined);
+    dlg.onclose = () => finish(undefined);
+    seek.value = '0';
+    boxes = [];
+    draw();
+    video.src = url;
+    dlg.showModal();
+  });
+}
+
 // ---------- 進捗表示 ----------
 function progress(el) {
   el.classList.remove('hidden');
@@ -83,11 +171,13 @@ $('user-file').addEventListener('change', updateButtons);
 // ---------- お手本の登録 ----------
 $('model-add-btn').addEventListener('click', async () => {
   const file = $('model-file').files[0];
+  const target = await choosePerson(file);
+  if (target === undefined) return;
   const p = progress($('model-progress'));
   state.busy = true;
   updateButtons();
   try {
-    const pose = await extractPose(file, { onProgress: p.update });
+    const pose = await extractPose(file, { target, onProgress: p.update });
     analyzeSession(pose); // 人物が取れているかの確認
     const id = crypto.randomUUID();
     await saveModel({ id, name: $('model-name').value.trim() || file.name, createdAt: Date.now(), video: file, pose });
@@ -109,17 +199,20 @@ $('model-add-btn').addEventListener('click', async () => {
 // ---------- 解析と比較 ----------
 $('analyze-btn').addEventListener('click', async () => {
   const file = $('user-file').files[0];
+  const target = await choosePerson(file);
+  if (target === undefined) return;
   const p = progress($('user-progress'));
   state.busy = true;
   updateButtons();
   try {
     const model = await getModel(state.selectedId);
-    const userPose = await extractPose(file, { onProgress: p.update });
+    const userPose = await extractPose(file, { target, onProgress: p.update });
     p.update(1, '比較中…');
     const modelAna = analyzeSession(model.pose);
     const userAna = analyzeSession(userPose);
     const result = compare(modelAna, userAna);
     renderResults({ model, modelAna, userFile: file, userPose, userAna, result });
+    window.__debug = { userPose, modelPose: model.pose, userAna, modelAna }; // 動作確認用
   } catch (err) {
     alert(`解析に失敗しました：${err.message}`);
   } finally {
