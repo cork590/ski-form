@@ -227,6 +227,23 @@ function turnSeries(raw, turn) {
   return out;
 }
 
+// 画面内での脚の傾き（腰−足首、+ = 画面の右へ傾く）を、右ターン・左ターンそれぞれで平均し、その中間を返す
+function estimateRoll(seq, turns, valid) {
+  const per = { 1: [], [-1]: [] };
+  for (const t of turns) {
+    const angs = [];
+    for (let i = t.start; i <= t.end; i++) {
+      if (!valid[i]) continue;
+      const w = seq[i];
+      const leg = sub(mid(w[LM.lHip], w[LM.rHip]), mid(w[LM.lAnk], w[LM.rAnk]));
+      angs.push(Math.atan2(leg[0], -leg[1]) * DEG);
+    }
+    if (angs.length) per[t.sign].push(mean(angs));
+  }
+  if (!per[1].length || !per[-1].length) return 0;
+  return (mean(per[1]) + mean(per[-1])) / 2;
+}
+
 export function analyzeSession(pose) {
   const { frames, fps } = pose;
   const warnings = [];
@@ -242,17 +259,53 @@ export function analyzeSession(pose) {
     warnings.push(`骨格を検出できたコマは全体の ${Math.round(validRatio * 100)}% でした。検出できた区間だけで比較しています。`);
   }
 
-  const smoothed = smoothSeq(wl, 5);
-  const raw = smoothed.map(frameMetrics);
-  const lateral = smooth1d(raw.map((m) => m.legLateral), 7);
   // 骨格を検出できなかった区間（補間しただけのコマ）が多いターンは使わない
   const valid = frames.map((f) => !!f.wl);
-  const detected = detectTurns(lateral, fps);
-  let turns = detected.filter((t) => {
-    let n = 0;
-    for (let i = t.start; i <= t.end; i++) n += valid[i] ? 1 : 0;
-    return n / (t.end - t.start + 1) >= 0.7;
-  });
+  const pass = (seq) => {
+    const raw = seq.map(frameMetrics);
+    const lateral = smooth1d(raw.map((m) => m.legLateral), 7);
+    const detected = detectTurns(lateral, fps);
+    const turns = detected.filter((t) => {
+      let n = 0;
+      for (let i = t.start; i <= t.end; i++) n += valid[i] ? 1 : 0;
+      return n / (t.end - t.start + 1) >= 0.7;
+    });
+    return { raw, lateral, detected, turns };
+  };
+
+  // カメラの傾き補正：右ターンと左ターンの傾きは左右対称になるはずなので、
+  // 平均が片側にずれていれば、その分カメラが傾いているとみなして骨格を回転させる
+  // 傾いているとターンの区切り位置もずれるので、補正→区切り直しを数回くり返して収束させる
+  const base = smoothSeq(wl, 5);
+  const rotate = (deg) => {
+    const c = Math.cos(-deg / DEG), sn = Math.sin(-deg / DEG);
+    return base.map((w) => w.map(([x, y, z]) => [x * c - y * sn, x * sn + y * c, z]));
+  };
+  let smoothed = base;
+  let res = pass(smoothed);
+  let cameraRoll = 0;
+  for (let k = 0; k < 4; k++) {
+    const r = estimateRoll(smoothed, res.turns, valid);
+    if (Math.abs(r) < 0.5) break;
+    const next = cameraRoll + r;
+    if (Math.abs(next) > 20) {
+      warnings.push(`カメラが大きく傾いている可能性があります（約${Math.abs(next).toFixed(0)}°）。自動補正の範囲を超えているため補正していません。`);
+      cameraRoll = 0;
+      smoothed = base;
+      res = pass(smoothed);
+      break;
+    }
+    cameraRoll = next;
+    smoothed = rotate(cameraRoll);
+    res = pass(smoothed);
+  }
+  if (Math.abs(cameraRoll) < 1) {
+    cameraRoll = 0;
+    smoothed = base;
+    res = pass(smoothed);
+  }
+  const { raw, lateral, detected } = res;
+  let turns = res.turns;
   if (detected.length > turns.length) {
     warnings.push(`検出した ${detected.length} ターンのうち、骨格がうまく取れなかった ${detected.length - turns.length} ターンは比較から外しました。`);
   }
@@ -281,6 +334,7 @@ export function analyzeSession(pose) {
   }
   return {
     fps, raw, wl: smoothed, lateral, turns, profile, fallback, warnings, motion, validRatio,
+    cameraRoll, slope: pose.slope ?? null,
     avgTurnDur: mean(turns.map((t) => (t.end - t.start) / fps)),
   };
 }

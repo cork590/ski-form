@@ -112,6 +112,15 @@
       <button id="trim-end" class="btn small">ここを終了に</button>
       <button id="trim-reset" class="btn small">全体に戻す</button>
     </div>
+    <label class="field slope-field">撮影した場所の斜度
+      <select id="pick-slope">
+        <option value="auto">自動（動画の位置情報から取得）</option>
+        <option value="gentle">緩斜面（約10°）</option>
+        <option value="medium">中斜面（約20°）</option>
+        <option value="steep">急斜面（約30°）</option>
+      </select>
+      <span class="slope-note">自動の場合、撮影地点の緯度・経度を標高データのサービス（国土地理院など）に送って斜度を計算します。動画そのものは送りません。</span>
+    </label>
     <p class="pick-status" id="pick-status">読み込み中…</p>
     <div class="pick-actions">
       <button id="pick-auto" class="btn">自動で選ぶ</button>

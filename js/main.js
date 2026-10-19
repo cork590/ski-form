@@ -5,6 +5,7 @@ import { analyzeSession, compare, METRICS, PHASES } from './analysis.js';
 import { attachSkeleton, drawProfileChart } from './draw.js';
 import { createViewer } from './viewer3d.js';
 import { IS_BETA, VERSION } from './config.js';
+import { resolveSlope } from './terrain.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -61,7 +62,7 @@ $('model-list').addEventListener('click', async (e) => {
 });
 
 // ---------- 解析する人を選ぶ ----------
-// 戻り値: { target: { t, box } | null（自動で選ぶ）, range: [開始秒, 終了秒] }／ undefined（キャンセル）
+// 戻り値: { target: { t, box } | null（自動で選ぶ）, range: [開始秒, 終了秒], slopeChoice }／ undefined（キャンセル）
 function choosePerson(file) {
   return new Promise((resolve) => {
     const dlg = $('pick-dialog'), video = $('pick-video'), canvas = $('pick-canvas');
@@ -131,7 +132,7 @@ function choosePerson(file) {
         status.textContent = '解析範囲の外の場面です。範囲の中の場面で人を選んでください。';
         return;
       }
-      finish({ target: { t: video.currentTime, box: hit }, range });
+      finish({ target: { t: video.currentTime, box: hit }, range, slopeChoice: $('pick-slope').value });
     };
     const finish = (value) => {
       video.removeEventListener('loadeddata', onLoaded);
@@ -152,7 +153,7 @@ function choosePerson(file) {
     video.addEventListener('seeked', refresh);
     seek.addEventListener('input', onSeek);
     canvas.addEventListener('click', onClick);
-    $('pick-auto').onclick = () => finish({ target: null, range });
+    $('pick-auto').onclick = () => finish({ target: null, range, slopeChoice: $('pick-slope').value });
     $('trim-start').onclick = () => {
       range = [Math.min(video.currentTime, range[1] - 1), range[1]];
       renderRange();
@@ -206,6 +207,8 @@ $('model-add-btn').addEventListener('click', async () => {
   updateButtons();
   try {
     const pose = await extractPose(file, { ...pick, onProgress: p.update });
+    p.update(1, '撮影地点の斜度を調べています…');
+    pose.slope = await resolveSlope(file, pick.slopeChoice);
     analyzeSession(pose); // 人物が取れているかの確認
     const id = crypto.randomUUID();
     await saveModel({ id, name: $('model-name').value.trim() || file.name, createdAt: Date.now(), video: file, pose });
@@ -235,6 +238,8 @@ $('analyze-btn').addEventListener('click', async () => {
   try {
     const model = await getModel(state.selectedId);
     const userPose = await extractPose(file, { ...pick, onProgress: p.update });
+    p.update(1, '撮影地点の斜度を調べています…');
+    userPose.slope = await resolveSlope(file, pick.slopeChoice);
     p.update(1, '比較中…');
     const modelAna = analyzeSession(model.pose);
     const userAna = analyzeSession(userPose);
@@ -252,6 +257,12 @@ $('analyze-btn').addEventListener('click', async () => {
 
 // ---------- 結果表示 ----------
 const fmt = (v, digits) => (v > 0 ? '+' : '') + v.toFixed(digits);
+const slopeText = (s) => (s ? `${s.deg.toFixed(0)}°` : '不明');
+const slopeSource = (us, ms) => {
+  const src = [us && `あなた：${us.source}`, ms && `お手本：${ms.source}`].filter(Boolean);
+  return src.length ? src.join(' ／ ') : '位置情報がありません。解析前に斜面の種類を選べます';
+};
+const rollText = (ana) => (ana.cameraRoll ? `${Math.abs(ana.cameraRoll).toFixed(0)}°` : 'なし');
 const kmh = (ana) => (ana.motion ? `${(ana.motion.speed * 3.6).toFixed(0)}` : '–');
 const radius = (ana) => (ana.motion ? `${ana.motion.radius.toFixed(1)}` : '–');
 
@@ -267,6 +278,10 @@ function renderResults({ model, modelAna, userFile, userPose, userAna, result })
     ...modelAna.warnings.map((w) => `お手本：${w}`),
     ...userAna.warnings.map((w) => `あなた：${w}`),
   ];
+  const ms = modelAna.slope, us = userAna.slope;
+  if (ms && us && Math.abs(ms.deg - us.deg) >= 8) {
+    warnings.push(`撮影した斜面の斜度が大きく違います（あなた ${us.deg.toFixed(0)}° ／ お手本 ${ms.deg.toFixed(0)}°）。斜度で正しい姿勢も変わるため、前後バランスや上体の前傾の比較は参考程度にしてください。`);
+  }
   $('warnings').innerHTML = warnings.map((w) => `<div class="warn">${esc(w)}</div>`).join('');
 
   $('summary').innerHTML = `
@@ -275,6 +290,8 @@ function renderResults({ model, modelAna, userFile, userPose, userAna, result })
     <div class="stat"><div class="label">1ターンの平均時間</div><div class="value">${userAna.avgTurnDur.toFixed(2)}<small>秒 （お手本 ${modelAna.avgTurnDur.toFixed(2)}秒）</small></div></div>
     <div class="stat"><div class="label">推定速度</div><div class="value">${kmh(userAna)}<small> km/h （お手本 ${kmh(modelAna)} km/h）</small></div><div class="note">体の傾きとターンのリズムから計算した目安です</div></div>
     <div class="stat"><div class="label">推定ターン半径</div><div class="value">${radius(userAna)}<small> m （お手本 ${radius(modelAna)} m）</small></div><div class="note">1ターンの弧の半径（ターンの大きさ）の目安です</div></div>
+    <div class="stat"><div class="label">撮影地点の斜度</div><div class="value">${slopeText(us)}<small> （お手本 ${slopeText(ms)}）</small></div><div class="note">${esc(slopeSource(us, ms))}</div></div>
+    <div class="stat"><div class="label">カメラの傾き補正</div><div class="value">${rollText(userAna)}<small> （お手本 ${rollText(modelAna)}）</small></div><div class="note">左右のターンの対称性から自動で補正しています</div></div>
     <div class="stat"><div class="label">比較したお手本</div><div class="value" style="font-size:1rem">${esc(model.name)}</div></div>`;
 
   // 動画と骨格
