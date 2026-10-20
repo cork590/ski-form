@@ -155,6 +155,7 @@ function choosePerson(file) {
     };
 
     const refresh = async () => {
+      if (scanning) return;
       renderRange();
       if (step !== 3) { draw(); return; }
       if (busy) { pending = true; return; }
@@ -168,8 +169,9 @@ function choosePerson(file) {
       }
       // 場面を動かしたら選び直し。1人だけなら自動で選んでおく
       selected = boxes.length === 1 ? { t: video.currentTime, box: boxes[0] } : null;
-      if (boxes.length === 1) status.textContent = `この人を解析します（緑の枠）。${sizeNote(boxes[0]) || 'よければ「解析を開始」を押してください。'}`;
-      else if (boxes.length > 1) status.textContent = `${boxes.length}人映っています。解析したい人の枠をタップしてください。`;
+      const prefix = note ? `${note} ` : '';
+      if (boxes.length === 1) status.textContent = prefix + `この人を解析します（緑の枠）。${sizeNote(boxes[0]) || 'よければ「解析を開始」を押してください。'}`;
+      else if (boxes.length > 1) status.textContent = prefix + `${boxes.length}人映っています。解析したい人の枠をタップしてください。`;
       else if (!status.textContent.startsWith('人を探せません')) status.textContent = 'この場面では人が見つかりません。スライダーで、人が大きく映っている場面に動かしてください。';
       draw();
       updateNext();
@@ -180,11 +182,13 @@ function choosePerson(file) {
 
     const showStep = (n) => {
       step = n;
+      note = '';
       const def = PICK_STEPS[n];
       $('pick-title').textContent = def.title;
       $('pick-hint').textContent = def.hint;
       next.textContent = def.next;
       $('pick-back').hidden = n === 1;
+      $('pick-suggest').hidden = n === 3;
       $('pick-slope-field').hidden = n !== 3;
       $('pick-steps').querySelectorAll('li').forEach((li) => {
         const k = Number(li.dataset.step);
@@ -222,6 +226,56 @@ function choosePerson(file) {
       }
     };
     const onBack = () => showStep(step - 1);
+
+    // 0.5秒ごとに人物の大きさを調べ、色の帯で表示し、大きく映っている一番長い区間を範囲にする
+    let scanning = false;
+    let note = ''; // 自動で範囲を選んだときの説明（ステップ3で表示し続ける）
+    const onSuggest = async () => {
+      if (scanning) return;
+      scanning = true;
+      next.disabled = true;
+      $('pick-suggest').disabled = true;
+      const d = video.duration;
+      const times = [];
+      for (let t = 0.25; t < d; t += 0.5) times.push(t);
+      const sizes = [];
+      for (let k = 0; k < times.length; k++) {
+        status.textContent = `人物の大きさを調べています… ${k + 1} / ${times.length}（初回はAIモデルの読み込みに時間がかかります）`;
+        video.currentTime = times[k];
+        await new Promise((r) => video.addEventListener('seeked', r, { once: true }));
+        let boxes = [];
+        // 速さ優先：画面を分割して探し直すことはしない（とても小さい人は見つからなくてよい）
+        try { boxes = await findPeople(video, { tiles: false }); } catch {}
+        sizes.push(boxes.length ? Math.max(...boxes.map((b) => b.h)) : 0);
+      }
+      const cls = (s) => (s === 0 ? 'none' : s < MIN_PERSON ? 'tiny' : s < SMALL_PERSON ? 'mid' : 'big');
+      $('size-strip').innerHTML = sizes.map((s) => `<span class="${cls(s)}" title="${Math.round(s * 100)}%"></span>`).join('');
+      $('size-strip').hidden = $('size-legend').hidden = false;
+
+      const maxS = Math.max(...sizes);
+      scanning = false;
+      $('pick-suggest').disabled = false;
+      next.disabled = false;
+      if (maxS < MIN_PERSON) {
+        status.textContent = `この動画は、どの場面でも人物が小さすぎます（最大で画面の高さの${Math.round(maxS * 100)}%）。ズームして大きく撮った動画を使ってください。`;
+        return;
+      }
+      // しきい値以上の区間のうち一番長いもの（1か所だけの途切れは許す）
+      const th = Math.max(SMALL_PERSON, maxS * 0.5);
+      let best = null, cur = null, gap = 0;
+      sizes.forEach((s, k) => {
+        if (s >= th) { cur = cur ? { ...cur, b: k } : { a: k, b: k }; gap = 0; }
+        else if (cur && gap === 0) { gap = 1; }
+        else { cur = null; gap = 0; }
+        if (cur && (!best || cur.b - cur.a > best.b - best.a)) best = { ...cur };
+      });
+      if (!best) best = { a: sizes.indexOf(maxS), b: sizes.indexOf(maxS) };
+      range = [Math.max(0, times[best.a] - 0.5), Math.min(d, times[best.b] + 0.5)];
+      if (range[1] - range[0] < 1) range[1] = Math.min(d, range[0] + 1);
+      showStep(3);
+      note = `人物が大きく映っている ${range[0].toFixed(1)}〜${range[1].toFixed(1)}秒 を選びました。${range[1] - range[0] < 4 ? '短い範囲なので、比べられるターンが少なくなります。' : ''}`;
+      status.textContent = note;
+    };
     const onClick = (e) => {
       if (step !== 3) return;
       const rect = canvas.getBoundingClientRect();
@@ -245,7 +299,7 @@ function choosePerson(file) {
       video.removeEventListener('seeked', refresh);
       seek.removeEventListener('input', onSeek);
       canvas.removeEventListener('click', onClick);
-      next.onclick = $('pick-back').onclick = $('pick-cancel').onclick = null;
+      next.onclick = $('pick-back').onclick = $('pick-cancel').onclick = $('pick-suggest').onclick = null;
       dlg.onclose = null;
       dlg.close();
       video.removeAttribute('src');
@@ -259,6 +313,8 @@ function choosePerson(file) {
     seek.addEventListener('input', onSeek);
     canvas.addEventListener('click', onClick);
     next.onclick = onNext;
+    $('pick-suggest').onclick = onSuggest;
+    $('size-strip').hidden = $('size-legend').hidden = true;
     $('pick-back').onclick = onBack;
     $('pick-cancel').onclick = () => finish(undefined);
     dlg.onclose = () => finish(undefined);
@@ -399,10 +455,25 @@ function renderResults({ model, modelAna, userFile, userPose, userAna, result })
   if (ms && us && Math.abs(ms.deg - us.deg) >= 8) {
     warnings.push(`撮影した斜面の斜度が大きく違います（あなた ${us.deg.toFixed(0)}° ／ お手本 ${ms.deg.toFixed(0)}°）。斜度で正しい姿勢も変わるため、前後バランスや上体の前傾の比較は参考程度にしてください。`);
   }
+  const reasons = [];
+  const okCount = (pose) => pose.frames.filter((f) => f.status === 'ok').length;
+  const medSize = (pose) => {
+    const s = pose.frames.filter((f) => f.status === 'ok').map((f) => f.size).sort((a, b) => a - b);
+    return s.length ? s[Math.floor(s.length / 2)] : 0;
+  };
+  for (const [label, pose, ana] of [['お手本', model.pose, modelAna], ['あなた', userPose, userAna]]) {
+    if (ana.fallback || ana.turns.length < 2) reasons.push(`${label}の動画から比較に使えたターンが${ana.fallback ? '0' : ana.turns.length}つしかありません（2つ以上が必要です）`);
+    if (okCount(pose) < 45) reasons.push(`${label}の動画で骨格を検出できたコマが${okCount(pose)}コマと少なすぎます`);
+    if (medSize(pose) < SMALL_PERSON) reasons.push(`${label}の動画で人物が小さく映っています（画面の高さの約${Math.round(medSize(pose) * 100)}%）`);
+  }
+  const unreliable = reasons.length > 0;
+  $('reliability').hidden = !unreliable;
+  $('reliability').innerHTML = unreliable ? `<b>⚠ この結果は信頼性が低いため、参考程度に見てください</b>${reasons.map((r) => `・${esc(r)}`).join('<br>')}<br>人物が大きく映っていて、2ターン以上入っている範囲を選ぶと、信頼できる結果になります。` : '';
+
   $('warnings').innerHTML = warnings.map((w) => `<div class="warn">${esc(w)}</div>`).join('');
 
   $('summary').innerHTML = `
-    <div class="stat"><div class="label">お手本との近さ</div><div class="value">${result.similarity}<small> / 100</small></div></div>
+    <div class="stat"><div class="label">お手本との近さ${unreliable ? '（参考値）' : ''}</div><div class="value">${result.similarity}<small> / 100</small></div></div>
     <div class="stat"><div class="label">検出したターン数</div><div class="value">${userAna.fallback ? '–' : userAna.turns.length}<small> （お手本 ${modelAna.fallback ? '–' : modelAna.turns.length}）</small></div></div>
     <div class="stat"><div class="label">1ターンの平均時間</div><div class="value">${userAna.avgTurnDur.toFixed(2)}<small>秒 （お手本 ${modelAna.avgTurnDur.toFixed(2)}秒）</small></div></div>
     <div class="stat"><div class="label">推定速度</div><div class="value">${kmh(userAna)}<small> km/h （お手本 ${kmh(modelAna)} km/h）</small></div><div class="note">体の傾きとターンのリズムから計算した目安です</div></div>

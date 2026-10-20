@@ -207,6 +207,17 @@ main { max-width: 1100px; margin: 0 auto; padding: 8px 16px 48px; }
 .pick-steps li::before { content: counter(step) '. '; }
 .pick-steps li.active { background: var(--accent); color: var(--accent-text); font-weight: 600; }
 .pick-steps li.done { color: var(--text); }
+.size-strip { display: flex; height: 10px; margin-top: 4px; border-radius: 3px; overflow: hidden; }
+.size-strip span { flex: 1; }
+.size-strip .big, .size-legend .big { background: #2f9e7a; }
+.size-strip .mid, .size-legend .mid { background: #e0b43a; }
+.size-strip .tiny, .size-legend .tiny { background: #d9534f; }
+.size-strip .none, .size-legend .none { background: var(--border); }
+.size-legend { font-size: 0.75rem; color: var(--text-muted); margin-top: 4px; }
+.size-legend .lg { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: middle; margin: 0 2px 0 8px; }
+.pick-actions { flex-wrap: wrap; }
+.reliability { border: 2px solid var(--bad-text); background: var(--bad-bg); color: var(--bad-text); border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; font-size: 0.9rem; }
+.reliability b { display: block; margin-bottom: 4px; }
 .pick-status { min-height: 1.5em; }
 .pick-actions .primary { min-width: 140px; }
 /* 画面が低くても「次へ」のボタンが常に見えるよう、ダイアログの下端に固定する */

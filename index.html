@@ -64,6 +64,7 @@
 
     <section class="card hidden" id="results">
       <h2><span class="step">3</span>比較結果</h2>
+      <div class="reliability" id="reliability" hidden></div>
       <div id="warnings"></div>
       <div class="summary" id="summary"></div>
 
@@ -147,6 +148,8 @@
     <p class="hint" id="pick-hint"></p>
     <div class="video-wrap pick-wrap" id="pick-wrap"><video id="pick-video" muted playsinline preload="auto"></video><canvas id="pick-canvas"></canvas></div>
     <div class="trim-track"><div class="trim-range" id="trim-range"></div></div>
+    <div class="size-strip" id="size-strip" hidden></div>
+    <div class="size-legend" id="size-legend" hidden><span class="lg big"></span>大きく映っている <span class="lg mid"></span>小さめ <span class="lg tiny"></span>小さすぎ <span class="lg none"></span>人がいない</div>
     <input type="range" id="pick-seek" min="0" max="1000" value="0">
     <div class="trim-label" id="trim-label"></div>
     <p class="pick-status" id="pick-status"></p>
@@ -161,6 +164,7 @@
     </label>
     <div class="pick-actions">
       <button id="pick-cancel" class="btn">キャンセル</button>
+      <button id="pick-suggest" class="btn">人物が大きく映っている範囲を自動で選ぶ</button>
       <button id="pick-back" class="btn">← 戻る</button>
       <button id="pick-next" class="btn primary"></button>
     </div>

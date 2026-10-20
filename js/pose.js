@@ -89,7 +89,7 @@ async function seekTo(video, t) {
 }
 
 // 画面全体で人物を探し、見つからなければ重なりのあるタイルに分けて探す（小さな人物向け）
-function detectPeople(detector, video, W, H, tileCanvas) {
+function detectPeople(detector, video, W, H, tileCanvas, tiles = true) {
   const boxes = [];
   const collect = (res, ox, oy, sx, sy) => {
     for (const d of res.detections) {
@@ -98,7 +98,7 @@ function detectPeople(detector, video, W, H, tileCanvas) {
     }
   };
   collect(detector.detect(video), 0, 0, 1, 1);
-  if (boxes.length) return boxes;
+  if (boxes.length || !tiles) return boxes;
 
   const t = Math.round(Math.min(W, H) * 0.6);
   const ctx = tileCanvas.getContext('2d');
@@ -129,10 +129,10 @@ function pickPerson(boxes, prev) {
 }
 
 /** 動画の今の場面に映っている人物の枠（0〜1の座標）を返す。解析する人を選んでもらうのに使う */
-export async function findPeople(video) {
+export async function findPeople(video, { tiles = true } = {}) {
   const { detector } = await getModels();
   const W = video.videoWidth, H = video.videoHeight;
-  return detectPeople(detector, video, W, H, document.createElement('canvas'))
+  return detectPeople(detector, video, W, H, document.createElement('canvas'), tiles)
     .map((b) => ({ x: b.x / W, y: b.y / H, w: b.w / W, h: b.h / H }));
 }
 
