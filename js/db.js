@@ -8,7 +8,7 @@ function open() {
     const req = indexedDB.open(DB_NAME, 1);
     req.onupgradeneeded = () => req.result.createObjectStore(STORE, { keyPath: 'id' });
     req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onerror = () => reject(req.error ?? new Error('保存領域を開けませんでした'));
   });
 }
 
@@ -18,7 +18,10 @@ async function run(mode, fn) {
     const tx = db.transaction(STORE, mode);
     const req = fn(tx.objectStore(STORE));
     tx.oncomplete = () => { db.close(); resolve(req.result); };
-    tx.onerror = () => { db.close(); reject(tx.error); };
+    // 失敗すると error のあと abort が来る。WebKit では error の中身が空のことがある
+    const fail = () => { db.close(); reject(tx.error ?? req.error ?? new Error('保存に失敗しました')); };
+    tx.onerror = fail;
+    tx.onabort = fail;
   });
 }
 

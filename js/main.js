@@ -10,6 +10,15 @@ import { resolveSlope } from './terrain.js';
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+// プライベートブラウズなどで保存できなかったお手本（ページを閉じると消える）
+const memoryModels = new Map();
+const allModels = async () => {
+  let saved = [];
+  try { saved = await listModels(); } catch {}
+  return [...saved, ...memoryModels.values()];
+};
+const findModel = async (id) => memoryModels.get(id) ?? getModel(id);
+
 const state = {
   selectedId: null,
   busy: false,
@@ -25,7 +34,7 @@ if (IS_BETA) document.body.classList.add('beta');
 
 // ---------- お手本の一覧 ----------
 async function renderModelList() {
-  const models = (await listModels()).sort((a, b) => b.createdAt - a.createdAt);
+  const models = (await allModels()).sort((a, b) => b.createdAt - a.createdAt);
   if (!models.some((m) => m.id === state.selectedId)) state.selectedId = models[0]?.id ?? null;
   const list = $('model-list');
   if (!models.length) {
@@ -37,7 +46,7 @@ async function renderModelList() {
         <label>
           <input type="radio" name="model" value="${m.id}" ${m.id === state.selectedId ? 'checked' : ''}>
           <span>${esc(m.name)}</span>
-          <span class="meta">${m.pose.duration.toFixed(1)}秒 ・ ${new Date(m.createdAt).toLocaleDateString('ja-JP')}</span>
+          <span class="meta">${m.pose.duration.toFixed(1)}秒 ・ ${new Date(m.createdAt).toLocaleDateString('ja-JP')}${memoryModels.has(m.id) ? ' ・ 一時的（ページを閉じると消えます）' : ''}</span>
         </label>
         <button class="btn small" data-delete="${m.id}">削除</button>
       </li>`).join('');
@@ -55,9 +64,10 @@ $('model-list').addEventListener('change', (e) => {
 $('model-list').addEventListener('click', async (e) => {
   const id = e.target.dataset?.delete;
   if (!id) return;
-  const m = await getModel(id);
+  const m = await findModel(id);
   if (!confirm(`「${m?.name}」を削除しますか？`)) return;
-  await deleteModel(id);
+  if (memoryModels.has(id)) memoryModels.delete(id);
+  else await deleteModel(id);
   renderModelList();
 });
 
@@ -141,7 +151,7 @@ function choosePerson(file) {
       if (step !== 3) { draw(); return; }
       if (busy) { pending = true; return; }
       busy = true;
-      status.textContent = '人を探しています…（初回はAIモデルの読み込みに時間がかかります）';
+      status.textContent = '人を探しています…（初回はAIモデル 約30MBの読み込みに時間がかかります。Wi-Fiでの利用がおすすめです）';
       try {
         boxes = await findPeople(video);
       } catch (err) {
@@ -288,7 +298,13 @@ $('model-add-btn').addEventListener('click', async () => {
     pose.slope = await resolveSlope(file, pick.slopeChoice);
     analyzeSession(pose); // 人物が取れているかの確認
     const id = crypto.randomUUID();
-    await saveModel({ id, name: $('model-name').value.trim() || file.name, createdAt: Date.now(), video: file, pose });
+    const record = { id, name: $('model-name').value.trim() || file.name, createdAt: Date.now(), video: file, pose };
+    try {
+      await saveModel(record);
+    } catch (err) {
+      memoryModels.set(id, record);
+      alert(`お手本を端末に保存できませんでした（${err?.message ?? '原因不明'}）。プライベートブラウズでは保存できないことがあります。このページを開いている間は使えます。`);
+    }
     state.selectedId = id;
     try { localStorage.setItem('selectedModelId', id); } catch {}
     $('model-file').value = '';
@@ -296,7 +312,7 @@ $('model-add-btn').addEventListener('click', async () => {
     $('add-model').open = false;
     await renderModelList();
   } catch (err) {
-    alert(`お手本の登録に失敗しました：${err.message}`);
+    alert(`お手本の登録に失敗しました：${err?.message ?? err}`);
   } finally {
     p.done();
     state.busy = false;
@@ -313,7 +329,7 @@ $('analyze-btn').addEventListener('click', async () => {
   state.busy = true;
   updateButtons();
   try {
-    const model = await getModel(state.selectedId);
+    const model = await findModel(state.selectedId);
     const userPose = await extractPose(file, { ...pick, onProgress: p.update });
     p.update(1, '撮影地点の斜度を調べています…');
     userPose.slope = await resolveSlope(file, pick.slopeChoice);
@@ -324,7 +340,7 @@ $('analyze-btn').addEventListener('click', async () => {
     renderResults({ model, modelAna, userFile: file, userPose, userAna, result });
     window.__debug = { userPose, modelPose: model.pose, userAna, modelAna }; // 動作確認用
   } catch (err) {
-    alert(`解析に失敗しました：${err.message}`);
+    alert(`解析に失敗しました：${err?.message ?? err}`);
   } finally {
     p.done();
     state.busy = false;
@@ -374,6 +390,20 @@ function renderResults({ model, modelAna, userFile, userPose, userAna, result })
   // 動画と骨格
   const setupVideo = async (videoEl, wrapEl, blob, pose, fromStorage) => {
     wrapEl.style.aspectRatio = `${pose.width} / ${pose.height}`;
+    // トリミングした範囲だけを再生する（範囲の外に出たら範囲の始めに戻す）
+    const [a, b] = pose.range ?? [0, pose.duration];
+    const clampToRange = () => {
+      if (videoEl.currentTime < a - 0.05 || videoEl.currentTime > b + 0.05) videoEl.currentTime = a;
+    };
+    videoEl.onloadedmetadata = () => { videoEl.currentTime = a; };
+    videoEl.onplay = clampToRange;
+    videoEl.onseeked = () => { if (videoEl.paused) clampToRange(); };
+    videoEl.ontimeupdate = () => {
+      if (!videoEl.paused && videoEl.currentTime >= b) {
+        videoEl.pause();
+        videoEl.currentTime = a;
+      }
+    };
     state.cleanups.push(attachSkeleton(videoEl, wrapEl.querySelector('canvas'), pose, () => $('skeleton-toggle').checked));
     // iPhone（WebKit）では、IndexedDB に保存した動画をそのまま再生すると、
     // 最後まで再生した後やシークした後に止まることがあるため、いったんメモリにコピーしてから再生する

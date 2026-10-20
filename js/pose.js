@@ -62,6 +62,21 @@ function once(target, event, timeoutMs = 10000) {
 
 const r4 = (v) => Math.round(v * 10000) / 10000;
 
+// シーク後、新しいコマが実際に描画されるまで待つ。
+// iPhone（WebKit）では seeked の直後に描くと、前のコマが残っていることがある。
+// 一時停止中のシークで通知が来ないブラウザもあるので、最初の1回で確かめ、来なければ以後は待たない
+let frameCallbackWorks = null;
+async function seekTo(video, t) {
+  video.currentTime = t;
+  await once(video, 'seeked');
+  if (!video.requestVideoFrameCallback || frameCallbackWorks === false) return;
+  const fired = await new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), frameCallbackWorks ? 250 : 150);
+    video.requestVideoFrameCallback(() => { clearTimeout(timer); resolve(true); });
+  });
+  if (frameCallbackWorks === null) frameCallbackWorks = fired;
+}
+
 // 画面全体で人物を探し、見つからなければ重なりのあるタイルに分けて探す（小さな人物向け）
 function detectPeople(detector, video, W, H, tileCanvas) {
   const boxes = [];
@@ -130,7 +145,7 @@ const roiFromBox = (b) => ({ cx: b.x + b.w / 2, cy: b.y + b.h / 2, size: Math.ma
  *   status: 'ok' | 'small'（人物が小さすぎる） | 'none'（人物が見つからない） | 'skip'（解析範囲外）
  */
 export async function extractPose(file, { fps = 15, target = null, range = null, onProgress = () => {} } = {}) {
-  onProgress(0, 'AIモデルを読み込み中…');
+  onProgress(0, 'AIモデルを読み込み中…（初回は約30MBをダウンロードするため、モバイル回線では時間がかかります）');
   const { pose, detector } = await getModels();
 
   const url = URL.createObjectURL(file);
@@ -161,8 +176,7 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
 
     const step = async (i, st) => {
       const t = i / fps;
-      video.currentTime = t;
-      await once(video, 'seeked');
+      await seekTo(video, t);
 
       if (!st.roi || st.sinceDetect >= REDETECT_EVERY) {
         const person = pickPerson(detectPeople(detector, video, W, H, tileCanvas), st.roi);
@@ -228,7 +242,7 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
     const backward = { roi: startRoi(), sinceDetect: 0 };
     for (let i = start - 1; i >= first; i--) await step(i, backward);
     tsBase = ts + 1000;
-    return { fps, duration, width: W, height: H, frames };
+    return { fps, duration, width: W, height: H, frames, range: [first / fps, last / fps] };
   } finally {
     URL.revokeObjectURL(url);
   }
