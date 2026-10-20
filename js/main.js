@@ -372,15 +372,18 @@ function renderResults({ model, modelAna, userFile, userPose, userAna, result })
     <div class="stat"><div class="label">比較したお手本</div><div class="value" style="font-size:1rem">${esc(model.name)}</div></div>`;
 
   // 動画と骨格
-  const setupVideo = (videoEl, wrapEl, blob, pose) => {
-    const url = URL.createObjectURL(blob);
-    state.urls.push(url);
-    videoEl.src = url;
+  const setupVideo = async (videoEl, wrapEl, blob, pose, fromStorage) => {
     wrapEl.style.aspectRatio = `${pose.width} / ${pose.height}`;
     state.cleanups.push(attachSkeleton(videoEl, wrapEl.querySelector('canvas'), pose, () => $('skeleton-toggle').checked));
+    // iPhone（WebKit）では、IndexedDB に保存した動画をそのまま再生すると、
+    // 最後まで再生した後やシークした後に止まることがあるため、いったんメモリにコピーしてから再生する
+    const src = fromStorage ? new Blob([await blob.arrayBuffer()], { type: blob.type || 'video/mp4' }) : blob;
+    const url = URL.createObjectURL(src);
+    state.urls.push(url);
+    videoEl.src = url;
   };
-  setupVideo($('model-video'), $('model-wrap'), model.video, model.pose);
-  setupVideo($('user-video'), $('user-wrap'), userFile, userPose);
+  setupVideo($('model-video'), $('model-wrap'), model.video, model.pose, true);
+  setupVideo($('user-video'), $('user-wrap'), userFile, userPose, false);
 
   // 連動グラフ：人形の今の局面に合わせて、選んだ指標の値を表示する
   const liveSel = $('live-metric');
