@@ -161,7 +161,7 @@ function choosePerson(file) {
       if (step !== 3) { draw(); return; }
       if (busy) { pending = true; return; }
       busy = true;
-      status.textContent = '人を探しています…（初回はAIモデル 約30MBの読み込みに時間がかかります。Wi-Fiでの利用がおすすめです）';
+      status.textContent = '人を探しています…（初回はAIモデル 約50MBの読み込みに時間がかかります。Wi-Fiでの利用がおすすめです）';
       try {
         boxes = await findPeople(video);
       } catch (err) {

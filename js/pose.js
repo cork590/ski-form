@@ -6,7 +6,11 @@
 const VERSION_PATH = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
 const BUNDLE = `${VERSION_PATH}/vision_bundle.mjs`;
 const WASM = `${VERSION_PATH}/wasm`;
-const POSE_MODEL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task';
+// 大型版（heavy）を標準にする。小さく映った人やヘルメット・ゴーグル姿でも骨格を取りやすい。
+// ダウンロードは約30MBと大きいが、速さはほぼ変わらない。?model=full で従来版
+const POSE_MODEL = new URLSearchParams(location.search).get('model') !== 'full'
+  ? 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/latest/pose_landmarker_heavy.task'
+  : 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task';
 const DETECT_MODEL = 'https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite2/float16/latest/efficientdet_lite2.tflite';
 
 const CROP = 512; // 切り出した画像の大きさ（px）
@@ -46,14 +50,19 @@ function getModels() {
         diagnostics[name] = 'CPU';
         return await factory.createFromOptions(fileset, { ...opts, baseOptions: { ...opts.baseOptions, delegate: 'CPU' } });
       };
-      const pose = await create(PoseLandmarker, {
+      const poseOpts = (runningMode) => ({
         baseOptions: { modelAssetPath: POSE_MODEL },
-        runningMode: 'VIDEO',
+        runningMode,
         numPoses: 1,
         minPoseDetectionConfidence: 0.4,
         minPosePresenceConfidence: 0.4,
-        minTrackingConfidence: 0.4,
-      }, 'pose');
+        minTrackingConfidence: 0.5,
+      });
+      // VIDEO モード：前のコマの骨格を手がかりに追い続けるので、ヘルメットやゴーグルで顔が見えにくくても強い。
+      // ただし切り出し位置が変わると見当違いの場所を探すことがあるため、
+      // おかしな結果のときは IMAGE モード（毎回探し直す）でやり直す
+      const pose = await create(PoseLandmarker, poseOpts('VIDEO'), 'pose');
+      const poseImage = await create(PoseLandmarker, poseOpts('IMAGE'), 'pose');
       const detector = await create(ObjectDetector, {
         baseOptions: { modelAssetPath: DETECT_MODEL },
         runningMode: 'IMAGE',
@@ -61,7 +70,7 @@ function getModels() {
         maxResults: 8,
         categoryAllowlist: ['person'],
       }, 'detector');
-      return { pose, detector };
+      return { pose, poseImage, detector };
     })();
     modelsPromise.catch(() => { modelsPromise = null; });
   }
@@ -162,17 +171,21 @@ export async function findPeople(video, { tiles = true } = {}) {
     .map((b) => ({ x: b.x / W, y: b.y / H, w: b.w / W, h: b.h / H }));
 }
 
-// 骨格の中心と大きさが、追跡中の範囲から急に変わっていないか
-function isSamePerson(full, roi, W, H, framesSince = 1) {
+// 骨格の中心と大きさが、直前に認めた骨格から急に変わっていないか。
+// 物体検出の枠は板やストックを含むため骨格より大きい。大きさは「前のコマの骨格」とだけ比べる
+function isSamePerson(full, roi, W, H, framesSince = 1, prevSkelH = 0) {
   const vis = full.filter((p) => p[2] > 0.3);
   if (vis.length < 6) return true;
   const xs = vis.map((p) => p[0] * W), ys = vis.map((p) => p[1] * H);
   const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
   const h = Math.max(...ys) - Math.min(...ys);
-  const moved = Math.hypot(cx - roi.cx, cy - roi.cy) / roi.h;
-  const grew = h / roi.h;
   const k = Math.max(1, Math.min(6, framesSince));
-  return moved < 0.5 * k && grew < 1 + 0.35 * k && grew > 1 / (1 + 0.35 * k);
+  const ref = prevSkelH || roi.h;
+  const moved = Math.hypot(cx - roi.cx, cy - roi.cy) / ref;
+  if (moved >= 0.6 * k) return false;
+  if (!prevSkelH) return true;
+  const grew = h / prevSkelH;
+  return grew < 1 + 0.35 * k && grew > 1 / (1 + 0.35 * k);
 }
 
 const roiFromBox = (b) => ({ cx: b.x + b.w / 2, cy: b.y + b.h / 2, size: Math.max(b.w, b.h) * MARGIN, h: b.h });
@@ -183,8 +196,8 @@ const roiFromBox = (b) => ({ cx: b.x + b.w / 2, cy: b.y + b.h / 2, size: Math.ma
  *   status: 'ok' | 'small'（人物が小さすぎる） | 'none'（人物が見つからない） | 'skip'（解析範囲外）
  */
 export async function extractPose(file, { fps = 15, target = null, range = null, onProgress = () => {} } = {}) {
-  onProgress(0, 'AIモデルを読み込み中…（初回は約30MBをダウンロードするため、モバイル回線では時間がかかります）');
-  const { pose, detector } = await getModels();
+  onProgress(0, 'AIモデルを読み込み中…（初回は約50MBをダウンロードするため、Wi-Fiでの利用がおすすめです）');
+  const { pose, poseImage, detector } = await getModels();
 
   const url = URL.createObjectURL(file);
   const video = document.createElement('video');
@@ -271,15 +284,24 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
         cropCtx.drawImage(video, x0, y0, roi.size, roi.size, 0, 0, CROP, CROP);
         if (samples.length < 4 && i % 40 === 0) samples.push(crop.toDataURL('image/jpeg', 0.6));
         ts += Math.round(1000 / fps);
-        const res = pose.detectForVideo(crop, ts);
-        const lm = res.landmarks?.[0];
-        const wl = res.worldLandmarks?.[0];
         // 切り出し画像内の座標 → 元の動画の座標（0〜1）
-        const full = lm && wl ? lm.map((p) => [(x0 + p.x * roi.size) / W, (y0 + p.y * roi.size) / H, p.visibility ?? 1]) : null;
-        if (full && !isSamePerson(full, roi, W, H, st.lastIdx == null ? 1 : Math.abs(i - st.lastIdx))) {
+        const toFull = (res) => {
+          const l = res.landmarks?.[0], w = res.worldLandmarks?.[0];
+          return l && w ? { lm: l, wl: w, full: l.map((p) => [(x0 + p.x * roi.size) / W, (y0 + p.y * roi.size) / H, p.visibility ?? 1]) } : null;
+        };
+        const since = st.lastIdx == null ? 1 : Math.abs(i - st.lastIdx);
+        const ok = (r) => r && isSamePerson(r.full, roi, W, H, since, st.skelH);
+        let r = toFull(pose.detectForVideo(crop, ts));
+        if (!ok(r)) {
+          const retry = toFull(poseImage.detect(crop));
+          if (ok(retry)) { r = retry; retried++; }
+        }
+        const lm = r?.lm, wl = r?.wl, full = r?.full ?? null;
+        if (full && !ok(r)) {
           // 骨格が追跡中の位置から大きく飛んだ＝近くを通った別の人に乗り移った可能性が高い。
           // このコマは使わず、次のコマで物体検出から探し直す（直前の位置に近い人を優先）
           st.sinceDetect = REDETECT_EVERY;
+          rejected++;
         } else if (full) {
           frame.lm = full.map((p) => p.map(r4));
           frame.wl = wl.map((p) => [r4(p.x), r4(p.y), r4(p.z)]);
@@ -292,6 +314,7 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
           if (vis.length >= 8) {
             const xs = vis.map((p) => p[0] * W), ys = vis.map((p) => p[1] * H);
             const box = { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
+            st.skelH = st.skelH ? st.skelH * 0.5 + box.h * 0.5 : box.h;
             const next = roiFromBox(box);
             // 急な拡大縮小を抑える（骨格の誤検出で範囲が暴れないように）
             // 1コマ（1/15秒）で人物の大きさはほとんど変わらないので、変化を1割までに抑える
@@ -300,6 +323,7 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
             frame.size = r4(st.roi.h / H);
           }
         } else {
+          noPose++;
           st.roi = null; // 見失ったら次のコマで探し直す
         }
       }
@@ -311,6 +335,7 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
     // 方式2：再生しながら取り込む。解析が追いつくよう再生速度を自動で調整し、
     // 取りこぼしたコマは 'gap'（後で前後から補間）にする
     let mode = 'seek';
+    let rejected = 0, noPose = 0, retried = 0; // 診断用：別人と判断して捨てた数／骨格が返ってこなかった数
     let gaps = 0;
     const playRange = (fromIdx, toIdx, st) => new Promise((resolve) => {
       let lastIdx = fromIdx - 1;
@@ -378,7 +403,7 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
       diag: {
         seconds: Math.round((performance.now() - startedAt) / 100) / 10,
         pose: diagnostics.pose, detector: diagnostics.detector,
-        frameCallback: frameCallbackWorks, samples, stale, mode, gaps,
+        frameCallback: frameCallbackWorks, samples, stale, mode, gaps, rejected, noPose, retried,
       },
     };
   } finally {
