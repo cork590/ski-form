@@ -18,10 +18,11 @@ export const SMALL_PERSON = 0.06; // これ未満は解析はするが精度が�
 let modelsPromise = null;
 // 診断用：実際に使われた計算方法（GPU/CPU）。URLに ?cpu=1 を付けるとCPUで計算する
 export const diagnostics = { pose: null, detector: null };
-// iPhone・iPad のブラウザでは、GPU計算の結果が不正確になることがあるため、最初からCPUで計算する（?gpu=1 でGPU）
-const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+export const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const params = new URLSearchParams(location.search);
-const FORCE_CPU = params.has('cpu') || (IS_IOS && !params.has('gpu'));
+const FORCE_CPU = params.has('cpu');
+// 動作確認用：?slow=ミリ秒 で1コマの解析をわざと遅くする（iPhone の遅さを再現する）
+const SLOW_MS = Number(params.get('slow')) || 0;
 // iPhone ではシークしても画像が更新されないコマが多いため、再生しながら取り込む（?mode=play / ?mode=seek で切り替え）
 const usePlayback = (video) => !!video.requestVideoFrameCallback
   && (params.get('mode') === 'play' || (IS_IOS && params.get('mode') !== 'seek'));
@@ -72,6 +73,28 @@ function once(target, event, timeoutMs = 10000) {
     const timer = setTimeout(() => reject(new Error(`動画の読み込みがタイムアウトしました（${event}）`)), timeoutMs);
     target.addEventListener(event, () => { clearTimeout(timer); resolve(); }, { once: true });
   });
+}
+
+/**
+ * iPhone（Safari）は、一時停止中にシークしても画面の画像が更新されないことがある。
+ * 一瞬だけ再生して新しいコマが表示されたら止めることで、今の位置の画像を表示させる
+ */
+export async function showCurrentFrame(video) {
+  if (!IS_IOS || !video.paused || !video.src || video.nudging) return;
+  video.nudging = true; // この間の play/pause/timeupdate は利用者の操作として扱わない
+  const t = video.currentTime;
+  try {
+    const shown = new Promise((resolve) => {
+      const timer = setTimeout(resolve, 300);
+      if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(() => { clearTimeout(timer); resolve(); });
+    });
+    await video.play();
+    await shown;
+  } catch {}
+  video.pause();
+  // 再生で少し進んだ分は気にしない（1コマ未満）。大きく進んだときだけ戻す
+  if (Math.abs(video.currentTime - t) > 0.1) video.currentTime = t;
+  setTimeout(() => { video.nudging = false; }, 50);
 }
 
 const r4 = (v) => Math.round(v * 10000) / 10000;
@@ -140,7 +163,7 @@ export async function findPeople(video, { tiles = true } = {}) {
 }
 
 // 骨格の中心と大きさが、追跡中の範囲から急に変わっていないか
-function isSamePerson(full, roi, W, H) {
+function isSamePerson(full, roi, W, H, framesSince = 1) {
   const vis = full.filter((p) => p[2] > 0.3);
   if (vis.length < 6) return true;
   const xs = vis.map((p) => p[0] * W), ys = vis.map((p) => p[1] * H);
@@ -148,7 +171,8 @@ function isSamePerson(full, roi, W, H) {
   const h = Math.max(...ys) - Math.min(...ys);
   const moved = Math.hypot(cx - roi.cx, cy - roi.cy) / roi.h;
   const grew = h / roi.h;
-  return moved < 0.5 && grew < 1.35 && grew > 0.7;
+  const k = Math.max(1, Math.min(6, framesSince));
+  return moved < 0.5 * k && grew < 1 + 0.35 * k && grew > 1 / (1 + 0.35 * k);
 }
 
 const roiFromBox = (b) => ({ cx: b.x + b.w / 2, cy: b.y + b.h / 2, size: Math.max(b.w, b.h) * MARGIN, h: b.h });
@@ -226,6 +250,7 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
     // 今 video に表示されているコマを i 番目として解析する（同期処理）
     const process = (i, st) => {
       const t = i / fps;
+      if (SLOW_MS) { const end = performance.now() + SLOW_MS; while (performance.now() < end); }
 
       if (!st.roi || st.sinceDetect >= REDETECT_EVERY) {
         const person = pickPerson(detectPeople(detector, video, W, H, tileCanvas), st.roi);
@@ -251,7 +276,7 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
         const wl = res.worldLandmarks?.[0];
         // 切り出し画像内の座標 → 元の動画の座標（0〜1）
         const full = lm && wl ? lm.map((p) => [(x0 + p.x * roi.size) / W, (y0 + p.y * roi.size) / H, p.visibility ?? 1]) : null;
-        if (full && !isSamePerson(full, roi, W, H)) {
+        if (full && !isSamePerson(full, roi, W, H, st.lastIdx == null ? 1 : Math.abs(i - st.lastIdx))) {
           // 骨格が追跡中の位置から大きく飛んだ＝近くを通った別の人に乗り移った可能性が高い。
           // このコマは使わず、次のコマで物体検出から探し直す（直前の位置に近い人を優先）
           st.sinceDetect = REDETECT_EVERY;
@@ -260,6 +285,7 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
           frame.wl = wl.map((p) => [r4(p.x), r4(p.y), r4(p.z)]);
           frame.roi = [x0 / W, y0 / H, roi.size / W, roi.size / H].map(r4);
           frame.status = 'ok';
+          st.lastIdx = i;
 
           // 次のコマは、今回の骨格を囲む範囲を追いかける
           const vis = full.filter((p) => p[2] > 0.3);
@@ -288,7 +314,7 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
     let gaps = 0;
     const playRange = (fromIdx, toIdx, st) => new Promise((resolve) => {
       let lastIdx = fromIdx - 1;
-      let rate = 0.5;
+      const rate = 1;
       let finished = false;
       const finish = () => {
         if (finished) return;
@@ -304,15 +330,16 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
         arm();
         const i = Math.round(meta.mediaTime * fps);
         if (i > lastIdx && i <= toIdx) {
+          // 次のコマに進まないよう、すぐ一時停止してから解析する（iPhone は解析が遅いため）
+          video.pause();
           for (let k = lastIdx + 1; k < i; k++) { frames[k] = { ...frames[k], status: 'gap' }; gaps++; done++; }
-          const t0 = performance.now();
           ts = Math.max(ts + 1, tsBase + Math.round(meta.mediaTime * 1000));
           process(i, st);
           lastIdx = i;
-          // 1コマ分の動画時間を、解析にかかった時間より少し長く再生する速さにする
-          const want = (1000 / fps) / ((performance.now() - t0) * 1.3 + 1);
-          rate = Math.min(1, Math.max(0.1, rate * 0.6 + want * 0.4));
-          video.playbackRate = rate;
+          if (i >= toIdx) { clearTimeout(watchdog.id); finish(); return; }
+          video.requestVideoFrameCallback(onFrame);
+          video.play().catch(finish);
+          return;
         }
         if (i >= toIdx || video.ended) { clearTimeout(watchdog.id); finish(); return; }
         video.requestVideoFrameCallback(onFrame);

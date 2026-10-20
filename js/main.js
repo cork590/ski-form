@@ -1,5 +1,5 @@
 import { listModels, getModel, saveModel, deleteModel } from './db.js';
-import { extractPose, findPeople, MIN_PERSON, SMALL_PERSON } from './pose.js';
+import { extractPose, findPeople, MIN_PERSON, SMALL_PERSON, showCurrentFrame } from './pose.js';
 import { fitCanvas, containRect } from './draw.js';
 import { analyzeSession, compare, METRICS, PHASES, turnRelative } from './analysis.js';
 import { attachSkeleton, drawProfileChart } from './draw.js';
@@ -156,6 +156,7 @@ function choosePerson(file) {
 
     const refresh = async () => {
       if (scanning) return;
+      await showCurrentFrame(video);
       renderRange();
       if (step !== 3) { draw(); return; }
       if (busy) { pending = true; return; }
@@ -243,6 +244,7 @@ function choosePerson(file) {
         status.textContent = `人物の大きさを調べています… ${k + 1} / ${times.length}（初回はAIモデルの読み込みに時間がかかります）`;
         video.currentTime = times[k];
         await new Promise((r) => video.addEventListener('seeked', r, { once: true }));
+        await showCurrentFrame(video);
         let boxes = [];
         // 速さ優先：画面を分割して探し直すことはしない（とても小さい人は見つからなくてよい）
         try { boxes = await findPeople(video, { tiles: false }); } catch {}
@@ -512,11 +514,17 @@ function renderResults({ model, modelAna, userFile, userPose, userAna, result })
     videoEl.onclick = toggle;
     bar.oninput = () => { videoEl.currentTime = a + (Number(bar.value) / 1000) * len; };
     videoEl.onloadedmetadata = () => { videoEl.currentTime = a; updateUI(); };
-    videoEl.onplay = () => { clampToRange(); updateUI(); };
+    videoEl.onplay = () => { if (!videoEl.nudging) clampToRange(); updateUI(); };
     videoEl.onpause = updateUI;
-    videoEl.onseeked = () => { if (videoEl.paused) clampToRange(); updateUI(); };
+    videoEl.onseeked = () => {
+      if (videoEl.paused && !videoEl.nudging) {
+        clampToRange();
+        showCurrentFrame(videoEl);
+      }
+      updateUI();
+    };
     videoEl.ontimeupdate = () => {
-      if (!videoEl.paused && videoEl.currentTime >= b) {
+      if (!videoEl.nudging && !videoEl.paused && videoEl.currentTime >= b) {
         videoEl.pause();
         videoEl.currentTime = b;
       }
