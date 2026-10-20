@@ -163,8 +163,19 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
   const video = document.createElement('video');
   video.muted = true;
   video.playsInline = true;
+  video.setAttribute('playsinline', '');
   video.preload = 'auto';
+  // iPhone（Safari）は、ページに置いていない動画や一度も再生していない動画だと、
+  // シークしても画像が更新されないことがある。見えない大きさでページに置いておく
+  video.style.cssText = 'position:fixed;left:0;top:0;width:2px;height:2px;opacity:0.01;pointer-events:none;';
+  document.body.appendChild(video);
   video.src = url;
+  // 画像が更新されているかの確認用（同じ画像が続いたコマを数える）
+  const probe = document.createElement('canvas');
+  probe.width = probe.height = 16;
+  const probeCtx = probe.getContext('2d', { willReadFrequently: true });
+  let lastSig = '';
+  let stale = 0;
   const crop = document.createElement('canvas');
   crop.width = crop.height = CROP;
   const cropCtx = crop.getContext('2d', { willReadFrequently: true });
@@ -172,6 +183,11 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
 
   try {
     await once(video, 'loadeddata');
+    // 一瞬だけ再生して止める（iPhone でシーク後の画像が描かれるようにするため）
+    try {
+      await video.play();
+      video.pause();
+    } catch {}
     const duration = video.duration;
     if (!isFinite(duration) || duration <= 0) throw new Error('動画の長さを取得できませんでした。');
     const W = video.videoWidth, H = video.videoHeight;
@@ -190,6 +206,12 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
     const step = async (i, st) => {
       const t = i / fps;
       await seekTo(video, t);
+      probeCtx.drawImage(video, 0, 0, 16, 16);
+      const px = probeCtx.getImageData(0, 0, 16, 16).data;
+      let sig = '';
+      for (let k = 0; k < px.length; k += 16) sig += px[k].toString(36);
+      if (sig === lastSig) stale++;
+      lastSig = sig;
 
       if (!st.roi || st.sinceDetect >= REDETECT_EVERY) {
         const person = pickPerson(detectPeople(detector, video, W, H, tileCanvas), st.roi);
@@ -261,10 +283,14 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
       diag: {
         seconds: Math.round((performance.now() - startedAt) / 100) / 10,
         pose: diagnostics.pose, detector: diagnostics.detector,
-        frameCallback: frameCallbackWorks, samples,
+        frameCallback: frameCallbackWorks, samples, stale,
       },
     };
   } finally {
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+    video.remove();
     URL.revokeObjectURL(url);
   }
 }
