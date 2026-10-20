@@ -101,12 +101,15 @@
       </div>
 
       <h3>元の動画</h3>
-      <div class="videos">
-        <figure>
+      <div class="seg video-switch" id="video-switch">
+        <button data-show="model" class="active">お手本</button><button data-show="user">あなた</button>
+      </div>
+      <div class="videos" id="videos" data-show="model">
+        <figure data-who="model">
           <figcaption><span class="dot model"></span>お手本</figcaption>
           <div class="video-wrap" id="model-wrap"><video id="model-video" controls muted playsinline></video><canvas></canvas></div>
         </figure>
-        <figure>
+        <figure data-who="user">
           <figcaption><span class="dot user"></span>あなた</figcaption>
           <div class="video-wrap" id="user-wrap"><video id="user-video" controls muted playsinline></video><canvas></canvas></div>
         </figure>

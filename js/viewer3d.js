@@ -253,6 +253,7 @@ export function createViewer({ canvas, model, user, info, seek, playBtn, speedSe
   let playing = false;
   let lastTs = 0;
   let raf = 0;
+  let lastKey = '';
 
   const setPlaying = (v) => {
     playing = v;
@@ -333,6 +334,10 @@ export function createViewer({ canvas, model, user, info, seek, playBtn, speedSe
       seek.value = String(Math.round((pos / Math.max(1, timeline.length - 1)) * 1000));
     }
     lastTs = ts;
+    // 止まっていて何も変わっていなければ描き直さない（スマホの負荷を減らす）
+    const key = [pos.toFixed(3), view.yaw.toFixed(3), view.pitch.toFixed(3), mode, source, canvas.clientWidth, canvas.clientHeight, speedSel.value].join('|');
+    if (key === lastKey) return;
+    lastKey = key;
     draw();
   }
 

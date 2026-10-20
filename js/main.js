@@ -372,6 +372,7 @@ $('analyze-btn').addEventListener('click', async () => {
 });
 
 // ---------- 結果表示 ----------
+const isNarrow = () => matchMedia('(max-width: 700px)').matches;
 const fmt = (v, digits) => (v > 0 ? '+' : '') + v.toFixed(digits);
 const slopeText = (s) => (s ? `${s.deg.toFixed(0)}°` : '不明');
 const slopeSource = (us, ms) => {
@@ -459,10 +460,15 @@ function renderResults({ model, modelAna, userFile, userPose, userAna, result })
     return profileAt(ana.profile[key], st.phase);
   };
   let lastLive = null;
+  let lastLiveKey = '';
   let lastVideoSync = 0;
-  const drawLive = (st = lastLive) => {
+  const drawLive = (st = lastLive, force = false) => {
     if (!st) return;
     lastLive = st;
+    // 同じ場面・同じ指標なら描き直さない
+    const key = [st.phase.toFixed(3), st.ui, st.mi, liveSel.value, $('live-chart').clientWidth].join('|');
+    if (!force && key === lastLiveKey) return;
+    lastLiveKey = key;
     const def = METRICS.find((d) => d.key === liveSel.value);
     const u = liveValue(userAna, st.ui, st, def.key);
     const m = liveValue(modelAna, st.mi, st, def.key);
@@ -470,7 +476,7 @@ function renderResults({ model, modelAna, userFile, userPose, userAna, result })
     const diff = u - m;
     $('live-values').innerHTML = `あなた <b>${u.toFixed(def.digits)}</b> ／ お手本 <b>${m.toFixed(def.digits)}</b> ${esc(def.unit)}（差 <b class="${Math.abs(diff) >= def.thr ? 'bad-text' : ''}">${fmt(diff, def.digits)}</b>）`;
   };
-  liveSel.onchange = () => drawLive();
+  liveSel.onchange = () => drawLive(undefined, true);
 
   // 同じ角度での人形比較
   const viewer = createViewer({
@@ -486,14 +492,15 @@ function renderResults({ model, modelAna, userFile, userPose, userAna, result })
     onFrame: (st) => {
       drawLive(st);
       // 「実際の滑り」を再生中は、元の動画も同じ場面を追いかける（読み込み中は待つ）
-      const uv = $('user-video'), mv = $('model-video');
+      // 画面に表示されている動画だけを追いかける（スマホでは1本、PCでは2本）
       const now = performance.now();
-      if (st.playing && st.source === 'actual' && st.ui != null && now - lastVideoSync > 100 && !uv.seeking && !mv.seeking) {
+      if (st.playing && st.source === 'actual' && st.ui != null && now - lastVideoSync > (isNarrow() ? 250 : 100)) {
         lastVideoSync = now;
-        if (!uv.paused) uv.pause();
-        if (!mv.paused) mv.pause();
-        uv.currentTime = st.ui / userAna.fps;
-        mv.currentTime = st.mi / modelAna.fps;
+        for (const [v, t] of [[$('user-video'), st.ui / userAna.fps], [$('model-video'), st.mi / modelAna.fps]]) {
+          if (!v.offsetParent || v.seeking) continue;
+          if (!v.paused) v.pause();
+          v.currentTime = t;
+        }
       }
     },
   });
@@ -514,6 +521,15 @@ function renderResults({ model, modelAna, userFile, userPose, userAna, result })
   $('view-buttons').querySelector('[data-view="front"]').click();
   $('mode-buttons').querySelector('[data-mode="side"]').click();
 
+  // スマホ：お手本／あなたの動画を切り替えて1本ずつ表示する
+  $('video-switch').onclick = (ev) => {
+    const b = ev.target.closest('button');
+    if (!b) return;
+    $('video-switch').querySelectorAll('button').forEach((x) => x.classList.toggle('active', x === b));
+    $('videos').dataset.show = b.dataset.show;
+    (b.dataset.show === 'model' ? $('user-video') : $('model-video')).pause();
+  };
+
   $('sync-btn').onclick = () => {
     const mv = $('model-video'), uv = $('user-video');
     const firstTurnTime = (ana) => (ana.fallback ? 0 : ana.turns[0].start / ana.fps);
@@ -521,8 +537,8 @@ function renderResults({ model, modelAna, userFile, userPose, userAna, result })
     uv.currentTime = firstTurnTime(userAna);
     uv.playbackRate = 1;
     mv.playbackRate = Math.min(4, Math.max(0.25, modelAna.avgTurnDur / userAna.avgTurnDur || 1));
-    mv.play();
-    uv.play();
+    // スマホでは表示中の1本だけを再生する
+    for (const v of [mv, uv]) if (v.offsetParent) v.play();
   };
 
   // 診断情報
@@ -585,7 +601,7 @@ function renderResults({ model, modelAna, userFile, userPose, userAna, result })
     const card = e.target.closest('.chart');
     if (!card) return;
     liveSel.value = card.querySelector('canvas').dataset.key;
-    drawLive();
+    drawLive(undefined, true);
     $('viewer').scrollIntoView({ behavior: 'smooth', block: 'center' });
   };
 

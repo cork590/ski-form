@@ -223,7 +223,13 @@ main { max-width: 1100px; margin: 0 auto; padding: 8px 16px 48px; }
 .pick-status { font-size: 0.9rem; margin: 6px 0 12px; }
 .pick-actions { display: flex; gap: 10px; justify-content: flex-end; }
 
+/* スマホでは元の動画を1本ずつ（2本同時の再生は負荷が大きいため） */
+.video-switch { display: none; margin-bottom: 8px; }
+
 @media (max-width: 700px) {
+  .video-switch { display: inline-flex; }
+  .videos[data-show="model"] figure[data-who="user"],
+  .videos[data-show="user"] figure[data-who="model"] { display: none; }
   .viewer { height: 340px; }
   .videos { grid-template-columns: 1fr; }
 }
