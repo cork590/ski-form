@@ -46,7 +46,7 @@ async function renderModelList() {
         <label>
           <input type="radio" name="model" value="${m.id}" ${m.id === state.selectedId ? 'checked' : ''}>
           <span>${esc(m.name)}</span>
-          <span class="meta">${m.pose.duration.toFixed(1)}秒 ・ ${new Date(m.createdAt).toLocaleDateString('ja-JP')}${memoryModels.has(m.id) ? ' ・ 一時的（ページを閉じると消えます）' : ''}</span>
+          <span class="meta">${m.pose.range ? `${m.pose.range[0].toFixed(1)}〜${m.pose.range[1].toFixed(1)}秒を解析` : `${m.pose.duration.toFixed(1)}秒`} ・ ${new Date(m.createdAt).toLocaleDateString('ja-JP')}${memoryModels.has(m.id) ? ' ・ 一時的（ページを閉じると消えます）' : ''}${m.pose.range ? '' : ' ・ <span class="old">古い版で登録（登録し直してください）</span>'}</span>
         </label>
         <button class="btn small" data-delete="${m.id}">削除</button>
       </li>`).join('');
@@ -510,6 +510,7 @@ function renderResults({ model, modelAna, userFile, userPose, userAna, result })
     const n = Object.values(c).reduce((a, b) => a + b, 0) || 1;
     return `<div class="diag-item"><b>${label}</b>
       <ul>
+        <li>解析した範囲：${pose.range ? `${pose.range[0].toFixed(1)}〜${pose.range[1].toFixed(1)}秒` : '範囲の記録なし（古い版で登録）'}（動画全体 ${pose.duration.toFixed(1)}秒）・ 解析したコマ ${n}</li>
         <li>AIに渡した動画の大きさ：${pose.width}×${pose.height}</li>
         <li>計算方法：骨格 ${d.pose ?? '不明'} ／ 人物検出 ${d.detector ?? '不明'}</li>
         <li>骨格を検出できたコマ：${Math.round(((c.ok || 0) / n) * 100)}%（検出 ${c.ok || 0}・見失い ${c.none || 0}・小さすぎ ${c.small || 0}）</li>
