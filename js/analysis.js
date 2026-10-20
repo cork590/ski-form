@@ -254,6 +254,11 @@ export function analyzeSession(pose) {
   const wl = fillGaps(frames, 'wl');
   if (!wl) throw new Error('動画から人物を検出できませんでした。全身が映っている動画を使ってください。');
   const quality = frameQuality(frames, fps);
+  const okFrames = frames.filter((f) => f.status === 'ok');
+  const tiny = okFrames.filter((f) => f.size && f.size < 0.06).length;
+  if (okFrames.length && tiny / okFrames.length > 0.5) {
+    warnings.push(`解析できたコマの多くで、人物が小さく映っています（画面の高さの6%未満）。結果の精度は低めです。ズームして大きく撮った動画だと精度が上がります。`);
+  }
   if (quality.smallRatio > 0.15) {
     warnings.push(`人物が小さすぎて解析できないコマが ${Math.round(quality.smallRatio * 100)}% ありました（${quality.smallRanges}）。ズームして、人物が画面の高さの1/5以上になるように撮ると精度が上がります。`);
   }

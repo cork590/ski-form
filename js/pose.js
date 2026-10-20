@@ -12,7 +12,8 @@ const DETECT_MODEL = 'https://storage.googleapis.com/mediapipe-models/object_det
 const CROP = 512; // 切り出した画像の大きさ（px）
 const MARGIN = 1.6; // 人物の大きさに対する切り出し範囲の倍率
 const REDETECT_EVERY = 15; // 追跡中も、このコマ数ごとに物体検出で位置を確かめる
-export const MIN_PERSON = 0.04; // 人物の高さがこれ未満（画面比）だと小さすぎて解析しない
+export const MIN_PERSON = 0.025; // 人物の高さがこれ未満（画面比）だと小さすぎて解析しない
+export const SMALL_PERSON = 0.06; // これ未満は解析はするが精度が下がる
 
 let modelsPromise = null;
 // 診断用：実際に使われた計算方法（GPU/CPU）。URLに ?cpu=1 を付けるとCPUで計算する

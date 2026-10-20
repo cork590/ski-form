@@ -1,5 +1,5 @@
 import { listModels, getModel, saveModel, deleteModel } from './db.js';
-import { extractPose, findPeople } from './pose.js';
+import { extractPose, findPeople, MIN_PERSON, SMALL_PERSON } from './pose.js';
 import { fitCanvas, containRect } from './draw.js';
 import { analyzeSession, compare, METRICS, PHASES, turnRelative } from './analysis.js';
 import { attachSkeleton, drawProfileChart } from './draw.js';
@@ -91,6 +91,14 @@ const PICK_STEPS = {
   },
 };
 
+// 選んだ人の大きさについての注意（小さいと解析できない・精度が下がる）
+const sizeNote = (box) => {
+  const pct = Math.round(box.h * 100);
+  if (box.h < MIN_PERSON) return `⚠ この場面ではとても小さく映っています（画面の高さの${pct}%）。この大きさでは解析できません。もっと大きく映っている場面が範囲に入るようにしてください。`;
+  if (box.h < SMALL_PERSON) return `⚠ 小さめに映っています（画面の高さの${pct}%）。解析はできますが精度が下がります。`;
+  return '';
+};
+
 function choosePerson(file) {
   return new Promise((resolve) => {
     const dlg = $('pick-dialog'), video = $('pick-video'), canvas = $('pick-canvas');
@@ -160,7 +168,7 @@ function choosePerson(file) {
       }
       // 場面を動かしたら選び直し。1人だけなら自動で選んでおく
       selected = boxes.length === 1 ? { t: video.currentTime, box: boxes[0] } : null;
-      if (boxes.length === 1) status.textContent = 'この人を解析します（緑の枠）。よければ「解析を開始」を押してください。';
+      if (boxes.length === 1) status.textContent = `この人を解析します（緑の枠）。${sizeNote(boxes[0]) || 'よければ「解析を開始」を押してください。'}`;
       else if (boxes.length > 1) status.textContent = `${boxes.length}人映っています。解析したい人の枠をタップしてください。`;
       else if (!status.textContent.startsWith('人を探せません')) status.textContent = 'この場面では人が見つかりません。スライダーで、人が大きく映っている場面に動かしてください。';
       draw();
@@ -223,7 +231,7 @@ function choosePerson(file) {
         .sort((a, b) => a.w * a.h - b.w * b.h)[0];
       if (!hit) return;
       selected = { t: video.currentTime, box: hit };
-      status.textContent = `${boxes.indexOf(hit) + 1}番の人を選びました（緑の枠）。よければ「解析を開始」を押してください。`;
+      status.textContent = `${boxes.indexOf(hit) + 1}番の人を選びました（緑の枠）。${sizeNote(hit) || 'よければ「解析を開始」を押してください。'}`;
       draw();
       updateNext();
     };
@@ -263,6 +271,19 @@ function choosePerson(file) {
   });
 }
 
+// 骨格を1コマも取れなかったときに、理由とどうすればよいかを伝える
+function explainIfEmpty(pose, pick) {
+  const frames = pose.frames.filter((f) => f.status !== 'skip');
+  if (frames.some((f) => f.status === 'ok')) return;
+  const [a, b] = pick.range;
+  const small = frames.filter((f) => f.status === 'small');
+  if (small.length > frames.length / 2) {
+    const maxPct = Math.round(Math.max(...small.map((f) => f.size)) * 100);
+    throw new Error(`選んだ範囲（${a.toFixed(1)}〜${b.toFixed(1)}秒）では、人物が小さすぎて解析できませんでした（最大でも画面の高さの${maxPct}%）。人物が大きく映っている場面（画面の高さの1/5以上が理想）が入るように範囲を選び直すか、ズームして撮った動画を使ってください。`);
+  }
+  throw new Error(`選んだ範囲（${a.toFixed(1)}〜${b.toFixed(1)}秒）で、選んだ人の骨格を検出できませんでした。人物の全身がはっきり映っている場面が入るように範囲を選び直してください。`);
+}
+
 // ---------- 進捗表示 ----------
 function progress(el) {
   el.classList.remove('hidden');
@@ -294,6 +315,7 @@ $('model-add-btn').addEventListener('click', async () => {
   updateButtons();
   try {
     const pose = await extractPose(file, { ...pick, onProgress: p.update });
+    explainIfEmpty(pose, pick);
     p.update(1, '撮影地点の斜度を調べています…');
     pose.slope = await resolveSlope(file, pick.slopeChoice);
     analyzeSession(pose); // 人物が取れているかの確認
@@ -331,6 +353,7 @@ $('analyze-btn').addEventListener('click', async () => {
   try {
     const model = await findModel(state.selectedId);
     const userPose = await extractPose(file, { ...pick, onProgress: p.update });
+    explainIfEmpty(userPose, pick);
     p.update(1, '撮影地点の斜度を調べています…');
     userPose.slope = await resolveSlope(file, pick.slopeChoice);
     p.update(1, '比較中…');
