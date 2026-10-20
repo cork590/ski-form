@@ -108,11 +108,13 @@
       <div class="videos" id="videos" data-show="model">
         <figure data-who="model">
           <figcaption><span class="dot model"></span>お手本</figcaption>
-          <div class="video-wrap" id="model-wrap"><video id="model-video" controls muted playsinline></video><canvas></canvas></div>
+          <div class="video-wrap" id="model-wrap"><video id="model-video" muted playsinline></video><canvas></canvas></div>
+          <div class="vctl" id="model-video-ctl"><button class="vplay" aria-label="再生">▶</button><input type="range" class="vseek" min="0" max="1000" value="0" aria-label="再生位置"><span class="vtime">0.0 / 0.0秒</span></div>
         </figure>
         <figure data-who="user">
           <figcaption><span class="dot user"></span>あなた</figcaption>
-          <div class="video-wrap" id="user-wrap"><video id="user-video" controls muted playsinline></video><canvas></canvas></div>
+          <div class="video-wrap" id="user-wrap"><video id="user-video" muted playsinline></video><canvas></canvas></div>
+          <div class="vctl" id="user-video-ctl"><button class="vplay" aria-label="再生">▶</button><input type="range" class="vseek" min="0" max="1000" value="0" aria-label="再生位置"><span class="vtime">0.0 / 0.0秒</span></div>
         </figure>
       </div>
       <div class="video-actions">

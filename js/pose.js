@@ -22,6 +22,9 @@ export const diagnostics = { pose: null, detector: null };
 const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const params = new URLSearchParams(location.search);
 const FORCE_CPU = params.has('cpu') || (IS_IOS && !params.has('gpu'));
+// iPhone ではシークしても画像が更新されないコマが多いため、再生しながら取り込む（?mode=play / ?mode=seek で切り替え）
+const usePlayback = (video) => !!video.requestVideoFrameCallback
+  && (params.get('mode') === 'play' || (IS_IOS && params.get('mode') !== 'seek'));
 // VIDEO モードはタイムスタンプが単調増加である必要があるので、動画をまたいで積み上げる
 let tsBase = 0;
 
@@ -203,15 +206,26 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
     let ts = tsBase;
     let done = 0;
 
-    const step = async (i, st) => {
-      const t = i / fps;
-      await seekTo(video, t);
+    // 画像が前のコマから変わっていなければ数える（iPhone で起きる問題の確認用）
+    const checkStale = () => {
       probeCtx.drawImage(video, 0, 0, 16, 16);
       const px = probeCtx.getImageData(0, 0, 16, 16).data;
       let sig = '';
       for (let k = 0; k < px.length; k += 16) sig += px[k].toString(36);
       if (sig === lastSig) stale++;
       lastSig = sig;
+    };
+
+    // 方式1：1コマずつシークして解析する（PC向け。前後どちらにも追跡できる）
+    const step = async (i, st) => {
+      await seekTo(video, i / fps);
+      checkStale();
+      process(i, st);
+    };
+
+    // 今 video に表示されているコマを i 番目として解析する（同期処理）
+    const process = (i, st) => {
+      const t = i / fps;
 
       if (!st.roi || st.sinceDetect >= REDETECT_EVERY) {
         const person = pickPerson(detectPeople(detector, video, W, H, tileCanvas), st.roi);
@@ -268,22 +282,76 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
       onProgress(done / count, `骨格を解析中… ${done} / ${count}`);
     };
 
+    // 方式2：再生しながら取り込む。解析が追いつくよう再生速度を自動で調整し、
+    // 取りこぼしたコマは 'gap'（後で前後から補間）にする
+    let mode = 'seek';
+    let gaps = 0;
+    const playRange = (fromIdx, toIdx, st) => new Promise((resolve) => {
+      let lastIdx = fromIdx - 1;
+      let rate = 0.5;
+      let finished = false;
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        video.pause();
+        for (let k = lastIdx + 1; k <= toIdx; k++) { frames[k] = { ...frames[k], status: 'gap' }; gaps++; done++; }
+        resolve();
+      };
+      const watchdog = { id: 0 };
+      const arm = () => { clearTimeout(watchdog.id); watchdog.id = setTimeout(finish, 4000); };
+      const onFrame = (_now, meta) => {
+        if (finished) return;
+        arm();
+        const i = Math.round(meta.mediaTime * fps);
+        if (i > lastIdx && i <= toIdx) {
+          for (let k = lastIdx + 1; k < i; k++) { frames[k] = { ...frames[k], status: 'gap' }; gaps++; done++; }
+          const t0 = performance.now();
+          ts = Math.max(ts + 1, tsBase + Math.round(meta.mediaTime * 1000));
+          process(i, st);
+          lastIdx = i;
+          // 1コマ分の動画時間を、解析にかかった時間より少し長く再生する速さにする
+          const want = (1000 / fps) / ((performance.now() - t0) * 1.3 + 1);
+          rate = Math.min(1, Math.max(0.1, rate * 0.6 + want * 0.4));
+          video.playbackRate = rate;
+        }
+        if (i >= toIdx || video.ended) { clearTimeout(watchdog.id); finish(); return; }
+        video.requestVideoFrameCallback(onFrame);
+      };
+      (async () => {
+        video.pause();
+        video.currentTime = fromIdx / fps;
+        await once(video, 'seeked');
+        video.playbackRate = rate;
+        video.requestVideoFrameCallback(onFrame);
+        arm();
+        try { await video.play(); } catch { finish(); }
+      })();
+    });
+
     // 選んだ人物がいる場面から後ろへ、続いて前へさかのぼって追跡する
     const start = target ? Math.min(last, Math.max(first, Math.round(target.t * fps))) : first;
     const startRoi = () => (target
       ? roiFromBox({ x: target.box.x * W, y: target.box.y * H, w: target.box.w * W, h: target.box.h * H })
       : null);
-    const forward = { roi: startRoi(), sinceDetect: target ? 0 : Infinity };
-    for (let i = start; i <= last; i++) await step(i, forward);
-    const backward = { roi: startRoi(), sinceDetect: 0 };
-    for (let i = start - 1; i >= first; i--) await step(i, backward);
+    if (usePlayback(video)) {
+      mode = 'play';
+      // 方式2（iPhone）：再生しながら、表示されたコマを取り込む。
+      // 選んだ場面から最後まで → 範囲の始めから選んだ場面まで の順に再生する
+      await playRange(start, last, { roi: startRoi(), sinceDetect: target ? 0 : Infinity });
+      if (start > first) await playRange(first, start - 1, { roi: startRoi(), sinceDetect: REDETECT_EVERY });
+    } else {
+      const forward = { roi: startRoi(), sinceDetect: target ? 0 : Infinity };
+      for (let i = start; i <= last; i++) await step(i, forward);
+      const backward = { roi: startRoi(), sinceDetect: 0 };
+      for (let i = start - 1; i >= first; i--) await step(i, backward);
+    }
     tsBase = ts + 1000;
     return {
       fps, duration, width: W, height: H, frames, range: [first / fps, last / fps],
       diag: {
         seconds: Math.round((performance.now() - startedAt) / 100) / 10,
         pose: diagnostics.pose, detector: diagnostics.detector,
-        frameCallback: frameCallbackWorks, samples, stale,
+        frameCallback: frameCallbackWorks, samples, stale, mode, gaps,
       },
     };
   } finally {
