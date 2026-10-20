@@ -232,6 +232,11 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
     if (!isFinite(duration) || duration <= 0) throw new Error('動画の長さを取得できませんでした。');
     const W = video.videoWidth, H = video.videoHeight;
     const startedAt = performance.now();
+    // 結果画面でパラパラ再生するための、各コマの小さな画像（幅360px）
+    const thumb = document.createElement('canvas');
+    thumb.width = 360;
+    thumb.height = Math.round((360 * H) / W);
+    const thumbCtx = thumb.getContext('2d');
     const samples = []; // 診断用：AIに渡した切り出し画像の見本
 
     const total = Math.floor(duration * fps);
@@ -274,7 +279,8 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
       st.sinceDetect++;
 
       const roi = st.roi;
-      const frame = { t, lm: null, wl: null, size: roi ? r4(roi.h / H) : 0, roi: null, status: 'none' };
+      thumbCtx.drawImage(video, 0, 0, thumb.width, thumb.height);
+      const frame = { t, lm: null, wl: null, size: roi ? r4(roi.h / H) : 0, roi: null, status: 'none', img: thumb.toDataURL('image/jpeg', 0.7) };
       if (roi && roi.h / H < MIN_PERSON) {
         frame.status = 'small';
       } else if (roi) {

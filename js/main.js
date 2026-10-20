@@ -2,7 +2,7 @@ import { listModels, getModel, saveModel, deleteModel } from './db.js';
 import { extractPose, findPeople, MIN_PERSON, SMALL_PERSON, showCurrentFrame } from './pose.js';
 import { fitCanvas, containRect } from './draw.js';
 import { analyzeSession, compare, METRICS, PHASES, turnRelative } from './analysis.js';
-import { attachSkeleton, drawProfileChart } from './draw.js';
+import { attachSkeleton, drawProfileChart, createFlipbook } from './draw.js';
 import { createViewer } from './viewer3d.js';
 import { IS_BETA, VERSION } from './config.js';
 import { resolveSlope } from './terrain.js';
@@ -418,7 +418,7 @@ $('analyze-btn').addEventListener('click', async () => {
     const modelAna = analyzeSession(model.pose);
     const userAna = analyzeSession(userPose);
     const result = compare(modelAna, userAna);
-    renderResults({ model, modelAna, userFile: file, userPose, userAna, result });
+    await renderResults({ model, modelAna, userFile: file, userPose, userAna, result });
     window.__debug = { userPose, modelPose: model.pose, userAna, modelAna }; // 動作確認用
   } catch (err) {
     alert(`解析に失敗しました：${err?.message ?? err}`);
@@ -441,7 +441,7 @@ const rollText = (ana) => (ana.cameraRoll ? `${Math.abs(ana.cameraRoll).toFixed(
 const kmh = (ana) => (ana.motion ? `${(ana.motion.speed * 3.6).toFixed(0)}` : '–');
 const radius = (ana) => (ana.motion ? `${ana.motion.radius.toFixed(1)}` : '–');
 
-function renderResults({ model, modelAna, userFile, userPose, userAna, result }) {
+async function renderResults({ model, modelAna, userFile, userPose, userAna, result }) {
   state.cleanups.forEach((fn) => fn());
   state.urls.forEach((u) => URL.revokeObjectURL(u));
   state.cleanups = [];
@@ -484,17 +484,51 @@ function renderResults({ model, modelAna, userFile, userPose, userAna, result })
     <div class="stat"><div class="label">カメラの傾き補正</div><div class="value">${rollText(userAna)}<small> （お手本 ${rollText(modelAna)}）</small></div><div class="note">左右のターンの対称性から自動で補正しています</div></div>
     <div class="stat"><div class="label">比較したお手本</div><div class="value" style="font-size:1rem">${esc(model.name)}</div></div>`;
 
-  // 動画と骨格
-  const setupVideo = async (videoEl, wrapEl, blob, pose, fromStorage) => {
+  // 元の動画と骨格。お手本・あなたの再生を同じ操作で扱えるようにする
+  const players = {};
+  const setupPlayer = async (who, videoEl, wrapEl, blob, pose, fromStorage) => {
     wrapEl.style.aspectRatio = `${pose.width} / ${pose.height}`;
+    const canvas = wrapEl.querySelector('canvas');
+    const ctl = $(`${videoEl.id}-ctl`);
+    const playBtn = ctl.querySelector('.vplay'), bar = ctl.querySelector('.vseek'), label = ctl.querySelector('.vtime');
+
+    // 解析したコマの画像がある場合は、動画プレーヤーを使わずパラパラ再生する
+    // （切り取った範囲だけが確実に表示され、画像と骨格が必ず一致する）
+    if (pose.frames.some((f) => f.img)) {
+      videoEl.hidden = true;
+      videoEl.removeAttribute('src');
+      canvas.style.pointerEvents = 'auto';
+      let fb = null;
+      const updateUI = () => {
+        if (!fb) return;
+        if (document.activeElement !== bar) bar.value = String(Math.round((fb.time / (fb.length || 1)) * 1000));
+        label.textContent = `${fb.time.toFixed(1)} / ${fb.length.toFixed(1)}秒`;
+        playBtn.textContent = fb.playing ? '❚❚' : '▶';
+      };
+      fb = createFlipbook(canvas, pose, { isSkeletonVisible: () => $('skeleton-toggle').checked, onChange: updateUI });
+      const toggle = () => (fb.playing ? fb.pause() : fb.play(1));
+      playBtn.onclick = toggle;
+      canvas.onclick = toggle;
+      bar.oninput = () => fb.seek((Number(bar.value) / 1000) * fb.length);
+      updateUI();
+      state.cleanups.push(() => fb.destroy());
+      players[who] = {
+        play: (r = 1) => fb.play(r), pause: () => fb.pause(), seekFrame: (i) => fb.seekFrame(i),
+        visible: () => !!wrapEl.offsetParent,
+      };
+      return;
+    }
+
+    // 画像を持たない古いお手本：動画プレーヤーで再生する
+    videoEl.hidden = false;
+    canvas.style.pointerEvents = '';
+    canvas.onclick = null;
     // トリミングした範囲だけを再生する（範囲の外に出たら範囲の始めに戻す）
     const [a, b] = pose.range ?? [0, pose.duration];
     const clampToRange = () => {
       if (videoEl.currentTime < a - 0.05 || videoEl.currentTime > b + 0.05) videoEl.currentTime = a;
     };
     // 切り取った範囲を「0秒から始まる短い動画」として操作する、自前の再生ボタンとシークバー
-    const ctl = $(`${videoEl.id}-ctl`);
-    const playBtn = ctl.querySelector('.vplay'), bar = ctl.querySelector('.vseek'), label = ctl.querySelector('.vtime');
     const len = Math.max(0.1, b - a);
     const updateUI = () => {
       const rel = Math.min(len, Math.max(0, videoEl.currentTime - a));
@@ -537,9 +571,17 @@ function renderResults({ model, modelAna, userFile, userPose, userAna, result })
     const url = URL.createObjectURL(src);
     state.urls.push(url);
     videoEl.src = url;
+    players[who] = {
+      play: (r = 1) => { videoEl.playbackRate = r; videoEl.play(); },
+      pause: () => videoEl.pause(),
+      seekFrame: (i) => { videoEl.pause(); videoEl.currentTime = i / pose.fps; },
+      visible: () => !!wrapEl.offsetParent,
+    };
   };
-  setupVideo($('model-video'), $('model-wrap'), model.video, model.pose, true);
-  setupVideo($('user-video'), $('user-wrap'), userFile, userPose, false);
+  await Promise.all([
+    setupPlayer('model', $('model-video'), $('model-wrap'), model.video, model.pose, true),
+    setupPlayer('user', $('user-video'), $('user-wrap'), userFile, userPose, false),
+  ]);
 
   // 連動グラフ：人形の今の局面に合わせて、選んだ指標の値を表示する
   const liveSel = $('live-metric');
@@ -586,10 +628,10 @@ function renderResults({ model, modelAna, userFile, userPose, userAna, result })
     info: $('viewer-info'), seek: $('viewer-seek'), playBtn: $('viewer-play'), speedSel: $('viewer-speed'),
     onSeek: (e) => {
       if (!e) return;
-      $('user-video').pause();
-      $('model-video').pause();
-      $('user-video').currentTime = e.ui / userAna.fps;
-      $('model-video').currentTime = e.mi / modelAna.fps;
+      players.user.pause();
+      players.model.pause();
+      players.user.seekFrame(e.ui);
+      players.model.seekFrame(Math.round(e.mi));
     },
     onFrame: (st) => {
       drawLive(st);
@@ -598,10 +640,10 @@ function renderResults({ model, modelAna, userFile, userPose, userAna, result })
       const now = performance.now();
       if (st.playing && st.source === 'actual' && st.ui != null && now - lastVideoSync > (isNarrow() ? 250 : 100)) {
         lastVideoSync = now;
-        for (const [v, t] of [[$('user-video'), st.ui / userAna.fps], [$('model-video'), st.mi / modelAna.fps]]) {
-          if (!v.offsetParent || v.seeking) continue;
-          if (!v.paused) v.pause();
-          v.currentTime = t;
+        for (const [pl, i] of [[players.user, st.ui], [players.model, st.mi]]) {
+          if (!pl.visible()) continue;
+          pl.pause();
+          pl.seekFrame(i);
         }
       }
     },
@@ -629,18 +671,17 @@ function renderResults({ model, modelAna, userFile, userPose, userAna, result })
     if (!b) return;
     $('video-switch').querySelectorAll('button').forEach((x) => x.classList.toggle('active', x === b));
     $('videos').dataset.show = b.dataset.show;
-    (b.dataset.show === 'model' ? $('user-video') : $('model-video')).pause();
+    (b.dataset.show === 'model' ? players.user : players.model).pause();
   };
 
   $('sync-btn').onclick = () => {
-    const mv = $('model-video'), uv = $('user-video');
-    const firstTurnTime = (ana) => (ana.fallback ? 0 : ana.turns[0].start / ana.fps);
-    mv.currentTime = firstTurnTime(modelAna);
-    uv.currentTime = firstTurnTime(userAna);
-    uv.playbackRate = 1;
-    mv.playbackRate = Math.min(4, Math.max(0.25, modelAna.avgTurnDur / userAna.avgTurnDur || 1));
+    const firstTurn = (ana) => (ana.fallback ? 0 : ana.turns[0].start);
+    players.model.seekFrame(firstTurn(modelAna));
+    players.user.seekFrame(firstTurn(userAna));
+    const modelRate = Math.min(4, Math.max(0.25, modelAna.avgTurnDur / userAna.avgTurnDur || 1));
     // スマホでは表示中の1本だけを再生する
-    for (const v of [mv, uv]) if (v.offsetParent) v.play();
+    if (players.model.visible()) players.model.play(modelRate);
+    if (players.user.visible()) players.user.play(1);
   };
 
   // 診断情報

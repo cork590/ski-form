@@ -34,6 +34,50 @@ export function containRect(w, h, vw, vh) {
 }
 
 /** 動画の再生位置に合わせて骨格を描き続ける。戻り値を呼ぶと停止。 */
+// 1コマ分の骨格（と切り出し範囲・状態の表示）を描く。w, h は動画が表示されている範囲の大きさ
+function drawOverlay(ctx, w, h, f) {
+  if (f?.roi) {
+    // 自動ズームで切り出した範囲
+    ctx.save();
+    ctx.setLineDash([6, 4]);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(f.roi[0] * w, f.roi[1] * h, f.roi[2] * w, f.roi[3] * h);
+    ctx.restore();
+  }
+  if (f && f.status && f.status !== 'ok' && f.status !== 'gap') {
+    const msg = { small: '人物が小さすぎるため解析していません', skip: '解析範囲外' }[f.status] ?? '人物が見つかりません';
+    ctx.font = '600 13px system-ui, sans-serif';
+    const tw = ctx.measureText(msg).width;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+    ctx.fillRect(8, 8, tw + 16, 26);
+    ctx.fillStyle = '#ffffff';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(msg, 16, 21);
+  }
+  const lm = f?.lm;
+  if (!lm) return;
+  const left = cssVar('--bone-left'), right = cssVar('--bone-right');
+  ctx.lineWidth = 3;
+  ctx.lineCap = 'round';
+  for (const [a, b] of BONES) {
+    if (lm[a][2] < 0.3 || lm[b][2] < 0.3) continue;
+    ctx.strokeStyle = LEFT.has(a) && LEFT.has(b) ? left : (!LEFT.has(a) && !LEFT.has(b) ? right : '#ffffff');
+    ctx.beginPath();
+    ctx.moveTo(lm[a][0] * w, lm[a][1] * h);
+    ctx.lineTo(lm[b][0] * w, lm[b][1] * h);
+    ctx.stroke();
+  }
+  ctx.fillStyle = '#ffffff';
+  for (let k = 11; k < lm.length; k++) {
+    if (lm[k][2] < 0.3) continue;
+    ctx.beginPath();
+    ctx.arc(lm[k][0] * w, lm[k][1] * h, 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+/** 動画の再生位置に合わせて骨格を描き続ける。戻り値を呼ぶと停止。 */
 export function attachSkeleton(video, canvas, pose, isVisible) {
   let raf = 0;
   let last = -1;
@@ -49,52 +93,103 @@ export function attachSkeleton(video, canvas, pose, isVisible) {
     const r = containRect(cw, ch, pose.width, pose.height);
     ctx.save();
     ctx.translate(r.x, r.y);
-    const w = r.w, h = r.h;
     const i = Math.min(pose.frames.length - 1, Math.max(0, Math.round(video.currentTime * pose.fps)));
-    const f = pose.frames[i];
-    if (f?.roi) {
-      // 自動ズームで切り出した範囲
-      ctx.save();
-      ctx.setLineDash([6, 4]);
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
-      ctx.lineWidth = 1.5;
-      ctx.strokeRect(f.roi[0] * w, f.roi[1] * h, f.roi[2] * w, f.roi[3] * h);
-      ctx.restore();
-    }
-    if (f && f.status && f.status !== 'ok') {
-      const msg = { small: '人物が小さすぎるため解析していません', skip: '解析範囲外' }[f.status] ?? '人物が見つかりません';
-      ctx.font = '600 13px system-ui, sans-serif';
-      const tw = ctx.measureText(msg).width;
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-      ctx.fillRect(8, 8, tw + 16, 26);
-      ctx.fillStyle = '#ffffff';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(msg, 16, 21);
-    }
-    const lm = f?.lm;
-    if (!lm) { ctx.restore(); return; }
-    const left = cssVar('--bone-left'), right = cssVar('--bone-right');
-    ctx.lineWidth = 3;
-    ctx.lineCap = 'round';
-    for (const [a, b] of BONES) {
-      if (lm[a][2] < 0.3 || lm[b][2] < 0.3) continue;
-      ctx.strokeStyle = LEFT.has(a) && LEFT.has(b) ? left : (!LEFT.has(a) && !LEFT.has(b) ? right : '#ffffff');
-      ctx.beginPath();
-      ctx.moveTo(lm[a][0] * w, lm[a][1] * h);
-      ctx.lineTo(lm[b][0] * w, lm[b][1] * h);
-      ctx.stroke();
-    }
-    ctx.fillStyle = '#ffffff';
-    for (let k = 11; k < lm.length; k++) {
-      if (lm[k][2] < 0.3) continue;
-      ctx.beginPath();
-      ctx.arc(lm[k][0] * w, lm[k][1] * h, 3, 0, Math.PI * 2);
-      ctx.fill();
-    }
+    drawOverlay(ctx, r.w, r.h, pose.frames[i]);
     ctx.restore();
   };
   loop();
   return () => cancelAnimationFrame(raf);
+}
+
+/**
+ * 解析したコマの画像をパラパラ漫画のように再生する（動画プレーヤーを使わない）。
+ * 切り取った範囲のコマだけを持っているので、範囲外が映ることはなく、画像と骨格が必ず一致する。
+ * iPhone の動画プレーヤーはシーク後の画像が更新されないことがあるため、こちらを使う。
+ */
+export function createFlipbook(canvas, pose, { isSkeletonVisible, onChange = () => {} }) {
+  const [a, b] = pose.range ?? [0, pose.duration];
+  const first = Math.max(0, Math.round(a * pose.fps));
+  const last = Math.min(pose.frames.length - 1, Math.round(b * pose.fps));
+  const images = new Map();
+  const imageAt = (i) => {
+    // 取りこぼしたコマ（画像なし）は、手前で一番近い画像を使う
+    for (let k = i; k >= first; k--) {
+      const src = pose.frames[k]?.img;
+      if (!src) continue;
+      if (!images.has(k)) {
+        const img = new Image();
+        img.onload = () => { if (Math.round(pos) === i || !state.playing) dirty = true; };
+        img.src = src;
+        images.set(k, img);
+      }
+      return images.get(k);
+    }
+    return null;
+  };
+  let pos = first;
+  let rate = 1;
+  let lastTs = 0;
+  let dirty = true;
+  let raf = 0;
+  const state = { playing: false };
+  let lastKey = '';
+
+  const draw = () => {
+    const i = Math.round(pos);
+    const visible = isSkeletonVisible();
+    const key = [i, visible, canvas.clientWidth, canvas.clientHeight].join('|');
+    if (!dirty && key === lastKey) return;
+    dirty = false;
+    lastKey = key;
+    const { ctx, w: cw, h: ch } = fitCanvas(canvas);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, cw, ch);
+    const r = containRect(cw, ch, pose.width, pose.height);
+    const img = imageAt(i);
+    if (img?.complete && img.naturalWidth) ctx.drawImage(img, r.x, r.y, r.w, r.h);
+    if (visible) {
+      ctx.save();
+      ctx.translate(r.x, r.y);
+      drawOverlay(ctx, r.w, r.h, pose.frames[i]);
+      ctx.restore();
+    }
+  };
+  const loop = (ts) => {
+    raf = requestAnimationFrame(loop);
+    if (state.playing && lastTs) {
+      pos += ((ts - lastTs) / 1000) * pose.fps * rate;
+      if (pos >= last) {
+        pos = last;
+        state.playing = false;
+      }
+      onChange();
+    }
+    lastTs = ts;
+    draw();
+  };
+  raf = requestAnimationFrame(loop);
+  // 先に画像を読み込んでおく（再生中のちらつきを防ぐ）
+  for (let i = first; i <= last; i++) imageAt(i);
+
+  return {
+    hasImages: pose.frames.slice(first, last + 1).some((f) => f.img),
+    get length() { return (last - first) / pose.fps; },
+    get time() { return (pos - first) / pose.fps; },
+    get playing() { return state.playing; },
+    play(r = 1) {
+      rate = r;
+      if (pos >= last) pos = first;
+      state.playing = true;
+      onChange();
+    },
+    pause() { state.playing = false; onChange(); },
+    /** 範囲の始めからの秒数で移動 */
+    seek(t) { pos = Math.min(last, Math.max(first, first + t * pose.fps)); dirty = true; onChange(); },
+    /** 元の動画のコマ番号で移動 */
+    seekFrame(i) { pos = Math.min(last, Math.max(first, i)); dirty = true; onChange(); },
+    redraw() { dirty = true; },
+    destroy() { cancelAnimationFrame(raf); },
+  };
 }
 
 /** ターン1回分（0〜100%）の推移を お手本 / あなた で重ねて描く */
