@@ -560,6 +560,30 @@ function renderResults({ model, modelAna, userFile, userPose, userAna, result })
   };
   $('diag').innerHTML = `<p class="hint">v${VERSION} ・ ${esc(navigator.userAgent)}</p>${diagBlock('あなた', userPose, userAna)}${diagBlock('お手本', model.pose, modelAna)}<p class="hint">URLの末尾に ?cpu=1 を付けて開き直すと、GPUを使わずに計算します（遅くなりますが、精度が変わるか確かめられます）。お手本は登録し直してください。</p>`;
 
+  // 診断情報を文字でコピー（チャットなどに貼り付けて送れるように）
+  $('diag-copy').onclick = async () => {
+    const line = (label, pose, ana) => {
+      const d = pose.diag ?? {};
+      const c = {};
+      for (const f of pose.frames) if (f.status !== 'skip') c[f.status] = (c[f.status] || 0) + 1;
+      const sizes = pose.frames.filter((f) => f.status === 'ok').map((f) => f.size).sort((a, b) => a - b);
+      const med = sizes.length ? Math.round(sizes[Math.floor(sizes.length / 2)] * 100) : 0;
+      return `${label}: ${pose.width}x${pose.height} 範囲${pose.range ? pose.range.map((x) => x.toFixed(1)).join('-') : 'なし'}/${pose.duration.toFixed(1)}秒 計算=${d.pose}/${d.detector} 検出${c.ok || 0} 見失い${c.none || 0} 小さすぎ${c.small || 0} 人物の大きさ中央値${med}% 時間${d.seconds}秒 ターン${ana.turns.length} 傾き補正${ana.cameraRoll.toFixed(1)}`;
+    };
+    const text = [
+      `v${VERSION} ${navigator.userAgent}`,
+      line('あなた', userPose, userAna),
+      line('お手本', model.pose, modelAna),
+      `近さ${result.similarity} 上位: ${result.advice.slice(0, 3).map((a) => `${a.title}(${a.score.toFixed(1)})`).join(' / ')}`,
+    ].join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      $('diag-copy').textContent = 'コピーしました';
+    } catch {
+      prompt('下の文字をコピーしてください', text);
+    }
+  };
+
   // アドバイス
   const maxScore = Math.max(...result.advice.map((a) => a.score), 1);
   $('advice').innerHTML = result.advice.length

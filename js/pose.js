@@ -18,7 +18,10 @@ export const SMALL_PERSON = 0.06; // これ未満は解析はするが精度が�
 let modelsPromise = null;
 // 診断用：実際に使われた計算方法（GPU/CPU）。URLに ?cpu=1 を付けるとCPUで計算する
 export const diagnostics = { pose: null, detector: null };
-const FORCE_CPU = new URLSearchParams(location.search).has('cpu');
+// iPhone・iPad のブラウザでは、GPU計算の結果が不正確になることがあるため、最初からCPUで計算する（?gpu=1 でGPU）
+const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const params = new URLSearchParams(location.search);
+const FORCE_CPU = params.has('cpu') || (IS_IOS && !params.has('gpu'));
 // VIDEO モードはタイムスタンプが単調増加である必要があるので、動画をまたいで積み上げる
 let tsBase = 0;
 
