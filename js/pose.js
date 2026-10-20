@@ -15,6 +15,9 @@ const REDETECT_EVERY = 15; // 追跡中も、このコマ数ごとに物体検�
 export const MIN_PERSON = 0.04; // 人物の高さがこれ未満（画面比）だと小さすぎて解析しない
 
 let modelsPromise = null;
+// 診断用：実際に使われた計算方法（GPU/CPU）。URLに ?cpu=1 を付けるとCPUで計算する
+export const diagnostics = { pose: null, detector: null };
+const FORCE_CPU = new URLSearchParams(location.search).has('cpu');
 // VIDEO モードはタイムスタンプが単調増加である必要があるので、動画をまたいで積み上げる
 let tsBase = 0;
 
@@ -24,12 +27,16 @@ function getModels() {
       // 重いライブラリは解析時に読み込む（画面の表示を止めないため）
       const { FilesetResolver, PoseLandmarker, ObjectDetector } = await import(BUNDLE);
       const fileset = await FilesetResolver.forVisionTasks(WASM);
-      const create = async (factory, opts) => {
-        try {
-          return await factory.createFromOptions(fileset, { ...opts, baseOptions: { ...opts.baseOptions, delegate: 'GPU' } });
-        } catch {
-          return await factory.createFromOptions(fileset, { ...opts, baseOptions: { ...opts.baseOptions, delegate: 'CPU' } });
+      const create = async (factory, opts, name) => {
+        if (!FORCE_CPU) {
+          try {
+            const m = await factory.createFromOptions(fileset, { ...opts, baseOptions: { ...opts.baseOptions, delegate: 'GPU' } });
+            diagnostics[name] = 'GPU';
+            return m;
+          } catch {}
         }
+        diagnostics[name] = 'CPU';
+        return await factory.createFromOptions(fileset, { ...opts, baseOptions: { ...opts.baseOptions, delegate: 'CPU' } });
       };
       const pose = await create(PoseLandmarker, {
         baseOptions: { modelAssetPath: POSE_MODEL },
@@ -38,14 +45,14 @@ function getModels() {
         minPoseDetectionConfidence: 0.4,
         minPosePresenceConfidence: 0.4,
         minTrackingConfidence: 0.4,
-      });
+      }, 'pose');
       const detector = await create(ObjectDetector, {
         baseOptions: { modelAssetPath: DETECT_MODEL },
         runningMode: 'IMAGE',
         scoreThreshold: 0.2,
         maxResults: 8,
         categoryAllowlist: ['person'],
-      });
+      }, 'detector');
       return { pose, detector };
     })();
     modelsPromise.catch(() => { modelsPromise = null; });
@@ -164,6 +171,8 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
     const duration = video.duration;
     if (!isFinite(duration) || duration <= 0) throw new Error('動画の長さを取得できませんでした。');
     const W = video.videoWidth, H = video.videoHeight;
+    const startedAt = performance.now();
+    const samples = []; // 診断用：AIに渡した切り出し画像の見本
 
     const total = Math.floor(duration * fps);
     // 指定された範囲の外は解析しない（時間とコマ番号の対応を保つため、空のコマで埋めておく）
@@ -195,6 +204,7 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
         cropCtx.fillStyle = '#808080';
         cropCtx.fillRect(0, 0, CROP, CROP);
         cropCtx.drawImage(video, x0, y0, roi.size, roi.size, 0, 0, CROP, CROP);
+        if (samples.length < 4 && i % 40 === 0) samples.push(crop.toDataURL('image/jpeg', 0.6));
         ts += Math.round(1000 / fps);
         const res = pose.detectForVideo(crop, ts);
         const lm = res.landmarks?.[0];
@@ -242,7 +252,14 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
     const backward = { roi: startRoi(), sinceDetect: 0 };
     for (let i = start - 1; i >= first; i--) await step(i, backward);
     tsBase = ts + 1000;
-    return { fps, duration, width: W, height: H, frames, range: [first / fps, last / fps] };
+    return {
+      fps, duration, width: W, height: H, frames, range: [first / fps, last / fps],
+      diag: {
+        seconds: Math.round((performance.now() - startedAt) / 100) / 10,
+        pose: diagnostics.pose, detector: diagnostics.detector,
+        frameCallback: frameCallbackWorks, samples,
+      },
+    };
   } finally {
     URL.revokeObjectURL(url);
   }

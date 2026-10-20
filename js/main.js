@@ -502,6 +502,24 @@ function renderResults({ model, modelAna, userFile, userPose, userAna, result })
     uv.play();
   };
 
+  // 診断情報
+  const diagBlock = (label, pose, ana) => {
+    const d = pose.diag ?? {};
+    const c = {};
+    for (const f of pose.frames) if (f.status !== 'skip') c[f.status] = (c[f.status] || 0) + 1;
+    const n = Object.values(c).reduce((a, b) => a + b, 0) || 1;
+    return `<div class="diag-item"><b>${label}</b>
+      <ul>
+        <li>AIに渡した動画の大きさ：${pose.width}×${pose.height}</li>
+        <li>計算方法：骨格 ${d.pose ?? '不明'} ／ 人物検出 ${d.detector ?? '不明'}</li>
+        <li>骨格を検出できたコマ：${Math.round(((c.ok || 0) / n) * 100)}%（検出 ${c.ok || 0}・見失い ${c.none || 0}・小さすぎ ${c.small || 0}）</li>
+        <li>解析時間：${d.seconds ?? '不明'}秒 ・ コマ待ち：${d.frameCallback === null || d.frameCallback === undefined ? '未使用' : d.frameCallback ? 'あり' : 'なし'}</li>
+        <li>比較に使ったターン：${ana.turns.length}</li>
+      </ul>
+      <div class="diag-samples">${(d.samples ?? []).map((src) => `<img src="${src}" alt="AIに渡した画像の見本">`).join('')}</div></div>`;
+  };
+  $('diag').innerHTML = `<p class="hint">v${VERSION} ・ ${esc(navigator.userAgent)}</p>${diagBlock('あなた', userPose, userAna)}${diagBlock('お手本', model.pose, modelAna)}<p class="hint">URLの末尾に ?cpu=1 を付けて開き直すと、GPUを使わずに計算します（遅くなりますが、精度が変わるか確かめられます）。お手本は登録し直してください。</p>`;
+
   // アドバイス
   const maxScore = Math.max(...result.advice.map((a) => a.score), 1);
   $('advice').innerHTML = result.advice.length
