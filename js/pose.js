@@ -28,6 +28,7 @@ const FORCE_CPU = params.has('cpu');
 // 動作確認用：?slow=ミリ秒 で1コマの解析をわざと遅くする（iPhone の遅さを再現する）
 const SLOW_MS = Number(params.get('slow')) || 0;
 // iPhone ではシークしても画像が更新されないコマが多いため、再生しながら取り込む（?mode=play / ?mode=seek で切り替え）
+// 取り込んだ画像は、PC と同じ手順で解析する
 const usePlayback = (video) => !!video.requestVideoFrameCallback
   && (params.get('mode') === 'play' || (IS_IOS && params.get('mode') !== 'seek'));
 // VIDEO モードはタイムスタンプが単調増加である必要があるので、動画をまたいで積み上げる
@@ -254,6 +255,9 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
     let ts = tsBase;
     let done = 0;
 
+    // 解析するコマの画像。通常は video、iPhone では取り込んでおいた画像（ImageBitmap）
+    let src = video;
+
     // 画像が前のコマから変わっていなければ数える（iPhone で起きる問題の確認用）
     const checkStale = () => {
       probeCtx.drawImage(video, 0, 0, 16, 16);
@@ -277,7 +281,7 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
       if (SLOW_MS) { const end = performance.now() + SLOW_MS; while (performance.now() < end); }
 
       if (!st.roi || st.sinceDetect >= REDETECT_EVERY) {
-        const person = pickPerson(detectPeople(detector, video, W, H, tileCanvas), st.roi);
+        const person = pickPerson(detectPeople(detector, src, W, H, tileCanvas), st.roi);
         if (person) st.roi = roiFromBox(person);
         else if (!st.roi || st.sinceDetect >= REDETECT_EVERY * 2) st.roi = null;
         st.sinceDetect = 0;
@@ -285,7 +289,7 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
       st.sinceDetect++;
 
       const roi = st.roi;
-      thumbCtx.drawImage(video, 0, 0, thumb.width, thumb.height);
+      thumbCtx.drawImage(src, 0, 0, thumb.width, thumb.height);
       const frame = { t, lm: null, wl: null, size: roi ? r4(roi.h / H) : 0, roi: null, status: 'none', img: thumb.toDataURL('image/jpeg', 0.7) };
       if (roi && roi.h / H < MIN_PERSON) {
         frame.status = 'small';
@@ -295,7 +299,7 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
         const x0 = roi.cx - roi.size / 2, y0 = roi.cy - roi.size / 2;
         cropCtx.fillStyle = '#808080';
         cropCtx.fillRect(0, 0, CROP, CROP);
-        cropCtx.drawImage(video, x0, y0, roi.size, roi.size, 0, 0, CROP, CROP);
+        cropCtx.drawImage(src, x0, y0, roi.size, roi.size, 0, 0, CROP, CROP);
         if (samples.length < 4 && i % 40 === 0) samples.push(crop.toDataURL('image/jpeg', 0.6));
         ts += Math.round(1000 / fps);
         // 切り出し画像内の座標 → 元の動画の座標（0〜1）
@@ -344,48 +348,52 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
       onProgress(done / count, `骨格を解析中… ${done} / ${count}`);
     };
 
-    // 方式2：再生しながら取り込む。解析が追いつくよう再生速度を自動で調整し、
-    // 取りこぼしたコマは 'gap'（後で前後から補間）にする
+    // 方式2（iPhone）：まず動画を再生しながら範囲内の全コマを高画質のJPEGとして取り込み、
+    // その画像を使って PC と同じ手順（選んだ場面から前後へ追跡）で解析する。
+    // iPhone はシークしても画像が更新されないことがあるため、再生中に表示されたコマを使う
     let mode = 'seek';
     let rejected = 0, noPose = 0, retried = 0; // 診断用：別人と判断して捨てた数／骨格が返ってこなかった数
     let gaps = 0;
-    const playRange = (fromIdx, toIdx, st) => new Promise((resolve) => {
+    const cap = document.createElement('canvas');
+    cap.width = W;
+    cap.height = H;
+    const capCtx = cap.getContext('2d');
+    const captureRange = (fromIdx, toIdx) => new Promise((resolve) => {
+      const blobs = new Map();
       let lastIdx = fromIdx - 1;
-      const rate = 1;
       let finished = false;
       const finish = () => {
         if (finished) return;
         finished = true;
+        clearTimeout(watchdog.id);
         video.pause();
-        for (let k = lastIdx + 1; k <= toIdx; k++) { frames[k] = { ...frames[k], status: 'gap' }; gaps++; done++; }
-        resolve();
+        resolve(blobs);
       };
       const watchdog = { id: 0 };
-      const arm = () => { clearTimeout(watchdog.id); watchdog.id = setTimeout(finish, 4000); };
-      const onFrame = (_now, meta) => {
+      const arm = () => { clearTimeout(watchdog.id); watchdog.id = setTimeout(finish, 5000); };
+      const onFrame = async (_now, meta) => {
         if (finished) return;
         arm();
         const i = Math.round(meta.mediaTime * fps);
         if (i > lastIdx && i <= toIdx) {
-          // 次のコマに進まないよう、すぐ一時停止してから解析する（iPhone は解析が遅いため）
           video.pause();
-          for (let k = lastIdx + 1; k < i; k++) { frames[k] = { ...frames[k], status: 'gap' }; gaps++; done++; }
-          ts = Math.max(ts + 1, tsBase + Math.round(meta.mediaTime * 1000));
-          process(i, st);
+          capCtx.drawImage(video, 0, 0, W, H);
+          const blob = await new Promise((r) => cap.toBlob(r, 'image/jpeg', 0.92));
+          if (blob) blobs.set(i, blob);
           lastIdx = i;
-          if (i >= toIdx) { clearTimeout(watchdog.id); finish(); return; }
+          onProgress((i - fromIdx + 1) / (toIdx - fromIdx + 1), `動画を取り込み中… ${i - fromIdx + 1} / ${toIdx - fromIdx + 1}`);
+          if (i >= toIdx) { finish(); return; }
           video.requestVideoFrameCallback(onFrame);
           video.play().catch(finish);
           return;
         }
-        if (i >= toIdx || video.ended) { clearTimeout(watchdog.id); finish(); return; }
+        if (i >= toIdx || video.ended) { finish(); return; }
         video.requestVideoFrameCallback(onFrame);
       };
       (async () => {
         video.pause();
         video.currentTime = fromIdx / fps;
         await once(video, 'seeked');
-        video.playbackRate = rate;
         video.requestVideoFrameCallback(onFrame);
         arm();
         try { await video.play(); } catch { finish(); }
@@ -397,18 +405,35 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
     const startRoi = () => (target
       ? roiFromBox({ x: target.box.x * W, y: target.box.y * H, w: target.box.w * W, h: target.box.h * H })
       : null);
+    let analyze = step;
     if (usePlayback(video)) {
-      mode = 'play';
-      // 方式2（iPhone）：再生しながら、表示されたコマを取り込む。
-      // 選んだ場面から最後まで → 範囲の始めから選んだ場面まで の順に再生する
-      await playRange(start, last, { roi: startRoi(), sinceDetect: target ? 0 : Infinity });
-      if (start > first) await playRange(first, start - 1, { roi: startRoi(), sinceDetect: REDETECT_EVERY });
-    } else {
-      const forward = { roi: startRoi(), sinceDetect: target ? 0 : Infinity };
-      for (let i = start; i <= last; i++) await step(i, forward);
-      const backward = { roi: startRoi(), sinceDetect: 0 };
-      for (let i = start - 1; i >= first; i--) await step(i, backward);
+      mode = 'capture';
+      const blobs = await captureRange(first, last);
+      // 取りこぼしたコマは、一番近い取り込み済みのコマで代用する
+      const nearest = (i) => {
+        for (let d = 0; d <= last - first; d++) {
+          if (blobs.has(i - d)) return blobs.get(i - d);
+          if (blobs.has(i + d)) return blobs.get(i + d);
+        }
+        return null;
+      };
+      for (let i = first; i <= last; i++) if (!blobs.has(i)) gaps++;
+      done = 0;
+      analyze = async (i, st) => {
+        const blob = nearest(i);
+        if (!blob) { frames[i] = { ...frames[i], status: 'gap' }; done++; return; }
+        const bmp = await createImageBitmap(blob);
+        src = bmp;
+        process(i, st);
+        src = video;
+        bmp.close();
+      };
     }
+    // PC と iPhone で同じ手順：選んだ場面から最後まで、続いて選んだ場面から範囲の始めへさかのぼる
+    const forward = { roi: startRoi(), sinceDetect: target ? 0 : Infinity };
+    for (let i = start; i <= last; i++) await analyze(i, forward);
+    const backward = { roi: startRoi(), sinceDetect: 0 };
+    for (let i = start - 1; i >= first; i--) await analyze(i, backward);
     tsBase = ts + 1000;
     return {
       fps, duration, width: W, height: H, frames, range: [first / fps, last / fps],

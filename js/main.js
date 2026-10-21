@@ -696,7 +696,7 @@ async function renderResults({ model, modelAna, userFile, userPose, userAna, res
         <li>AIに渡した動画の大きさ：${pose.width}×${pose.height}</li>
         <li>計算方法：骨格 ${d.pose ?? '不明'} ／ 人物検出 ${d.detector ?? '不明'}</li>
         <li>骨格を検出できたコマ：${Math.round(((c.ok || 0) / n) * 100)}%（検出 ${c.ok || 0}・見失い ${c.none || 0}・小さすぎ ${c.small || 0}）</li>
-        <li>取り込み方式：${d.mode === 'play' ? '再生しながら取り込み' : '1コマずつ移動'}・ 取りこぼし ${d.gaps ?? 0} ・ 画像が更新されなかったコマ ${d.stale ?? '不明'}</li>
+        <li>取り込み方式：${d.mode === 'capture' ? '再生しながら取り込んでから解析' : '1コマずつ移動'}・ 取りこぼし ${d.gaps ?? 0} ・ 画像が更新されなかったコマ ${d.stale ?? '不明'}</li>
         <li>解析時間：${d.seconds ?? '不明'}秒 ・ コマ待ち：${d.frameCallback === null || d.frameCallback === undefined ? '未使用' : d.frameCallback ? 'あり' : 'なし'}</li>
         <li>比較に使ったターン：${ana.turns.length}</li>
       </ul>
