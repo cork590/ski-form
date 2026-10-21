@@ -2,7 +2,7 @@ import { listModels, getModel, saveModel, deleteModel } from './db.js';
 import { extractPose, findPeople, MIN_PERSON, SMALL_PERSON, showCurrentFrame } from './pose.js';
 import { fitCanvas, containRect } from './draw.js';
 import { analyzeSession, compare, METRICS, PHASES, turnRelative } from './analysis.js';
-import { attachSkeleton, drawProfileChart, createFlipbook } from './draw.js';
+import { attachSkeleton, drawProfileChart, createFlipbook, drawTimingChart, turnPhaseName } from './draw.js';
 import { createViewer } from './viewer3d.js';
 import { IS_BETA, VERSION } from './config.js';
 import { resolveSlope } from './terrain.js';
@@ -168,10 +168,20 @@ function choosePerson(file) {
         boxes = [];
         status.textContent = `人を探せませんでした：${err.message}`;
       }
-      // 場面を動かしたら選び直し。1人だけなら自動で選んでおく
-      selected = boxes.length === 1 ? { t: video.currentTime, box: boxes[0] } : null;
+      // 場面を動かしたら選び直し。1人だけなら自動で選んでおく。
+      // ただし同じ場面のまま探し直しただけ（iPhone の画像更新など）なら、選んだ人を引き継ぐ
+      const prev = selected;
+      if (prev && Math.abs(prev.t - video.currentTime) < 0.15 && boxes.length) {
+        const c = (b) => [b.x + b.w / 2, b.y + b.h / 2];
+        const [px, py] = c(prev.box);
+        const near = boxes.reduce((a, b) => (Math.hypot(c(b)[0] - px, c(b)[1] - py) < Math.hypot(c(a)[0] - px, c(a)[1] - py) ? b : a));
+        selected = { t: video.currentTime, box: near };
+      } else {
+        selected = boxes.length === 1 ? { t: video.currentTime, box: boxes[0] } : null;
+      }
       const prefix = note ? `${note} ` : '';
-      if (boxes.length === 1) status.textContent = prefix + `この人を解析します（緑の枠）。${sizeNote(boxes[0]) || 'よければ「解析を開始」を押してください。'}`;
+      if (selected && prev && selected !== prev && boxes.length > 1) status.textContent = prefix + `${boxes.indexOf(selected.box) + 1}番の人を選んでいます（緑の枠）。${sizeNote(selected.box) || 'よければ「解析を開始」を押してください。'}`;
+      else if (boxes.length === 1) status.textContent = prefix + `この人を解析します（緑の枠）。${sizeNote(boxes[0]) || 'よければ「解析を開始」を押してください。'}`;
       else if (boxes.length > 1) status.textContent = prefix + `${boxes.length}人映っています。解析したい人の枠をタップしてください。`;
       else if (!status.textContent.startsWith('人を探せません')) status.textContent = 'この場面では人が見つかりません。スライダーで、人が大きく映っている場面に動かしてください。';
       draw();
@@ -430,6 +440,7 @@ $('analyze-btn').addEventListener('click', async () => {
 });
 
 // ---------- 結果表示 ----------
+const cssVarValue = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const isNarrow = () => matchMedia('(max-width: 700px)').matches;
 const fmt = (v, digits) => (v > 0 ? '+' : '') + v.toFixed(digits);
 const slopeText = (s) => (s ? `${s.deg.toFixed(0)}°` : '不明');
@@ -622,6 +633,39 @@ async function renderResults({ model, modelAna, userFile, userPose, userAna, res
   };
   liveSel.onchange = () => drawLive(undefined, true);
 
+  // 谷回り・山回りのタイミング比較（人形の再生に合わせて動く）
+  const timingRow = (label, color, turn, timing, fps) => (turn && turn.fall != null
+    ? { label, color, fallFrac: turn.fallFrac, valleySec: (turn.fall - turn.start) / fps, mountainSec: (turn.end - turn.fall) / fps }
+    : timing ? { label, color, ...timing } : null);
+  const ut = userAna.timing, mt = modelAna.timing;
+  if (!ut || !mt) {
+    $('timing').hidden = true;
+  } else {
+    $('timing').hidden = false;
+    const pct = (f) => `${Math.round(f * 100)}%`;
+    const d = ut.fallFrac - mt.fallFrac;
+    const base = `フォールラインに入るのは、ターンの お手本 ${pct(mt.fallFrac)} ／ あなた ${pct(ut.fallFrac)} の時点です（谷回り：お手本 ${mt.valleySec.toFixed(2)}秒・あなた ${ut.valleySec.toFixed(2)}秒、山回り：お手本 ${mt.mountainSec.toFixed(2)}秒・あなた ${ut.mountainSec.toFixed(2)}秒）。`;
+    $('timing-summary').textContent = base + (d > 0.08
+      ? 'あなたはフォールラインに入るのが遅く、谷回りが長めです。切り返し後に早めに次のターンへ体を送り込み、谷回りから板に圧をかけると、お手本のリズムに近づきます。'
+      : d < -0.08
+        ? 'あなたはフォールラインに入るのが早く、山回りが長めです。切り返し後すぐに板を下に向けず、谷回りで丸い弧を描くように丁寧にターンを始めると、お手本に近づきます。'
+        : '谷回りと山回りの配分は、お手本とほぼ同じです。');
+  }
+  let lastTimingKey = '';
+  const drawTiming = (st) => {
+    if (!ut || !mt) return;
+    const average = st.source === 'average';
+    const rows = [
+      timingRow('お手本', cssVarValue('--series-model'), average ? null : st.mTurn, mt, modelAna.fps),
+      timingRow('あなた', cssVarValue('--series-user'), average ? null : st.uTurn, ut, userAna.fps),
+    ];
+    const key = [st.phase.toFixed(3), rows.map((r) => r.fallFrac.toFixed(3)).join(), $('timing-chart').clientWidth].join('|');
+    if (key === lastTimingKey) return;
+    lastTimingKey = key;
+    drawTimingChart($('timing-chart'), rows, st.phase);
+    $('timing-now').textContent = `今：お手本 ${turnPhaseName(st.phase, rows[0].fallFrac)} ／ あなた ${turnPhaseName(st.phase, rows[1].fallFrac)}`;
+  };
+
   // 同じ角度での人形比較
   const viewer = createViewer({
     canvas: $('viewer'), model: modelAna, user: userAna,
@@ -635,6 +679,7 @@ async function renderResults({ model, modelAna, userFile, userPose, userAna, res
     },
     onFrame: (st) => {
       drawLive(st);
+      drawTiming(st);
       // 「実際の滑り」を再生中は、元の動画も同じ場面を追いかける（読み込み中は待つ）
       // 画面に表示されている動画だけを追いかける（スマホでは1本、PCでは2本）
       const now = performance.now();

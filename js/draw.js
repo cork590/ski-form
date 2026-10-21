@@ -271,3 +271,74 @@ export function drawProfileChart(canvas, def, modelSeries, userSeries, live = nu
     dot(live.user, cssVar('--series-user'));
   }
 }
+
+// 局面の名前（谷回り・フォールライン・山回り・切り返し）
+export function turnPhaseName(phase, fallFrac) {
+  if (phase < 0.06 || phase > 0.94) return '切り返し';
+  if (Math.abs(phase - fallFrac) < 0.04) return 'フォールライン';
+  return phase < fallFrac ? '谷回り' : '山回り';
+}
+
+/**
+ * 谷回り・山回りのタイミングを、お手本とあなたで並べて描く。
+ * rows: [{ label, color, fallFrac, valleySec, mountainSec }]、phase: 今の局面（0〜1）
+ */
+export function drawTimingChart(canvas, rows, phase) {
+  const { ctx, w, h } = fitCanvas(canvas);
+  ctx.clearRect(0, 0, w, h);
+  const padL = 58, padR = 10, top = 6, rowH = 30, gap = 10;
+  const bw = w - padL - padR;
+  const x = (f) => padL + f * bw;
+  ctx.font = '12px system-ui, sans-serif';
+  ctx.textBaseline = 'middle';
+  rows.forEach((r, k) => {
+    const y = top + k * (rowH + gap);
+    ctx.fillStyle = r.color;
+    ctx.textAlign = 'left';
+    ctx.font = '600 12px system-ui, sans-serif';
+    ctx.fillText(r.label, 0, y + rowH / 2);
+    ctx.font = '12px system-ui, sans-serif';
+    // 谷回り（濃い）・山回り（薄い）
+    ctx.globalAlpha = 0.85;
+    ctx.fillRect(x(0), y, x(r.fallFrac) - x(0), rowH);
+    ctx.globalAlpha = 0.35;
+    ctx.fillRect(x(r.fallFrac), y, x(1) - x(r.fallFrac), rowH);
+    ctx.globalAlpha = 1;
+    // フォールライン
+    ctx.strokeStyle = cssVar('--surface');
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(x(r.fallFrac), y - 3);
+    ctx.lineTo(x(r.fallFrac), y + rowH + 3);
+    ctx.stroke();
+    // 文字（入りきるときだけ）
+    const label = (text, a, b, color) => {
+      if (ctx.measureText(text).width + 8 > x(b) - x(a)) return;
+      ctx.fillStyle = color;
+      ctx.textAlign = 'center';
+      ctx.fillText(text, (x(a) + x(b)) / 2, y + rowH / 2);
+    };
+    label(`谷回り ${r.valleySec.toFixed(2)}秒`, 0, r.fallFrac, '#ffffff');
+    label(`山回り ${r.mountainSec.toFixed(2)}秒`, r.fallFrac, 1, cssVar('--text'));
+  });
+  // 目盛り：両端が切り返し、白い線がフォールライン
+  const yb = top + rows.length * (rowH + gap) - gap + 14;
+  ctx.fillStyle = cssVar('--text-muted');
+  ctx.textAlign = 'left';
+  ctx.fillText('切り返し', x(0), yb);
+  ctx.textAlign = 'right';
+  ctx.fillText('切り返し', x(1), yb);
+  ctx.textAlign = 'center';
+  ctx.fillText('白い線＝フォールライン', x(0.5), yb);
+  // 今の局面
+  if (phase != null) {
+    ctx.strokeStyle = cssVar('--text');
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.moveTo(x(phase), 0);
+    ctx.lineTo(x(phase), top + rows.length * (rowH + gap) - gap + 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+}

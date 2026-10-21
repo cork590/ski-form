@@ -246,6 +246,36 @@ function estimateRoll(seq, turns, valid) {
   return (mean(per[1]) + mean(per[-1])) / 2;
 }
 
+// 向き（板と腰の平均）が、その動画で最も多く向いている方向＝斜面の下 を横切る瞬間をフォールラインとする。
+// 横切らないターンは、体が一番深く傾いた瞬間で代用する。turn.fall（コマ番号）と turn.fallFrac（0〜1）を書き込む
+function markFallLines(turns, lateral, hipYaw, footYaw, valid) {
+  const heading = hipYaw.map((h, i) => (h + footYaw[i]) / 2);
+  const vals = heading.filter((_, i) => valid[i]);
+  const down = median(vals.length ? vals : heading);
+  for (const t of turns) {
+    const n = t.end - t.start;
+    let fall = -1;
+    // 切り返し直後と直前の1割は除いて探す
+    const a = t.start + Math.round(n * 0.1), b = t.end - Math.round(n * 0.1);
+    for (let i = a; i < b; i++) {
+      if (Math.sign(heading[i] - down) !== Math.sign(heading[i + 1] - down)) {
+        fall = Math.abs(heading[i] - down) < Math.abs(heading[i + 1] - down) ? i : i + 1;
+        break;
+      }
+    }
+    if (fall < 0) {
+      let best = a;
+      for (let i = a; i <= b; i++) if (Math.abs(lateral[i]) > Math.abs(lateral[best])) best = i;
+      fall = best;
+      t.fallBy = 'inclination';
+    } else {
+      t.fallBy = 'heading';
+    }
+    t.fall = fall;
+    t.fallFrac = (fall - t.start) / (n || 1);
+  }
+}
+
 export function analyzeSession(pose) {
   const { frames, fps } = pose;
   const warnings = [];
@@ -338,6 +368,14 @@ export function analyzeSession(pose) {
   const hipYaw = smooth1d(unwrap(raw.map((m) => m.hipYaw)), 7);
   const footYaw = smooth1d(unwrap(raw.map((m) => m.footYaw)), 7);
   const motions = fallback ? [] : turns.map((t) => estimateTurnMotion(t, lateral, hipYaw, footYaw, fps));
+
+  // 谷回り・山回りのタイミング：各ターンでフォールライン（板と腰の向きが斜面の真下を向く瞬間）を求める
+  if (!fallback) markFallLines(turns, lateral, hipYaw, footYaw, valid);
+  const timing = fallback ? null : {
+    fallFrac: mean(turns.map((t) => t.fallFrac)),
+    valleySec: mean(turns.map((t) => (t.fall - t.start) / fps)),
+    mountainSec: mean(turns.map((t) => (t.end - t.fall) / fps)),
+  };
   const motion = motions.length ? {
     speed: median(motions.map((m) => m.speed)),
     radius: median(motions.map((m) => m.radius)),
@@ -353,6 +391,7 @@ export function analyzeSession(pose) {
     fps, raw, wl: smoothed, lateral, turns, profile, fallback, warnings, motion, validRatio,
     cameraRoll, slope: pose.slope ?? null, reliable,
     avgTurnDur: mean(turns.map((t) => (t.end - t.start) / fps)),
+    timing,
   };
 }
 

@@ -411,9 +411,17 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
       ? roiFromBox({ x: target.box.x * W, y: target.box.y * H, w: target.box.w * W, h: target.box.h * H })
       : null);
     let analyze = step;
+    let blobs = null;
     if (usePlayback(video)) {
+      // 再生が始まらない・途中で止まることがまれにあるので、8割以上取り込めるまで2回までやり直す
+      const need = (last - first + 1) * 0.8;
+      for (let attempt = 0; attempt < 3 && !(blobs && blobs.size >= need); attempt++) {
+        const got = await captureRange(first, last);
+        if (!blobs || got.size > blobs.size) blobs = got;
+      }
+    }
+    if (blobs && blobs.size) {
       mode = 'capture';
-      const blobs = await captureRange(first, last);
       // 取りこぼしたコマは、一番近い取り込み済みのコマで代用する
       const nearest = (i) => {
         for (let d = 0; d <= last - first; d++) {

@@ -77,7 +77,7 @@ function buildTimeline(model, user) {
     const n = t.end - t.start;
     for (let i = t.start; i < t.end; i++) {
       const p = (i - t.start) / n;
-      entries.push({ ui: i, mi: mt.start + p * (mt.end - mt.start), turn: k, phase: p, sign: t.sign });
+      entries.push({ ui: i, mi: mt.start + p * (mt.end - mt.start), turn: k, phase: p, sign: t.sign, ut: t, mt });
     }
   });
   return entries;
@@ -303,7 +303,7 @@ export function createViewer({ canvas, model, user, info, seek, playBtn, speedSe
     }
 
     onFrame({
-      source, playing, phase: e.phase, sign: e.sign, turn: e.turn,
+      source, playing, phase: e.phase, sign: e.sign, turn: e.turn, uTurn: e.ut, mTurn: e.mt,
       ui: source === 'actual' ? Math.round(e.ui + (e1.ui - e.ui) * t) : null,
       mi: source === 'actual' ? Math.round(Math.abs(e1.mi - e.mi) > 2 ? e.mi : e.mi + (e1.mi - e.mi) * t) : null,
     });
