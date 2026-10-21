@@ -638,10 +638,14 @@ async function renderResults({ model, modelAna, userFile, userPose, userAna, res
     ? { label, color, fallFrac: turn.fallFrac, valleySec: (turn.fall - turn.start) / fps, mountainSec: (turn.end - turn.fall) / fps }
     : timing ? { label, color, ...timing } : null);
   const ut = userAna.timing, mt = modelAna.timing;
-  if (!ut || !mt) {
-    $('timing').hidden = true;
+  // 丸ごとのターン（切り返し→次の切り返し）がないと、谷回り・山回りを判定できない。理由と対処を出す
+  const missing = [!mt && 'お手本', !ut && 'あなた'].filter(Boolean);
+  $('timing-unavailable').hidden = missing.length === 0;
+  $('timing-body').hidden = missing.length > 0;
+  $('timing-now').textContent = '';
+  if (missing.length) {
+    $('timing-unavailable').textContent = `${missing.join('と')}の範囲に、切り返しから次の切り返しまでの「丸ごと1ターン」が入っていないため、谷回り・山回りを比べられません。切り返しを2回以上含むように（目安として2ターン分以上）範囲を広げてください。人物が大きく映っている場面を含めると、ターンを検出しやすくなります。`;
   } else {
-    $('timing').hidden = false;
     const pct = (f) => `${Math.round(f * 100)}%`;
     const d = ut.fallFrac - mt.fallFrac;
     const base = `フォールラインに入るのは、ターンの お手本 ${pct(mt.fallFrac)} ／ あなた ${pct(ut.fallFrac)} の時点です（谷回り：お手本 ${mt.valleySec.toFixed(2)}秒・あなた ${ut.valleySec.toFixed(2)}秒、山回り：お手本 ${mt.mountainSec.toFixed(2)}秒・あなた ${ut.mountainSec.toFixed(2)}秒）。`;

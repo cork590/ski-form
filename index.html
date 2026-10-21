@@ -100,6 +100,8 @@
         <canvas id="live-chart" class="live-chart"></canvas>
         <div class="timing" id="timing">
           <div class="timing-head"><b>ターンのタイミング比較（谷回り・山回り）</b><span id="timing-now"></span></div>
+          <p class="warn" id="timing-unavailable" hidden></p>
+          <div id="timing-body">
           <canvas id="timing-chart" class="timing-chart"></canvas>
           <div class="shape-head">
             <div class="seg" id="shape-buttons"><button data-shape="fig8" class="active">8の字</button><button data-shape="circle">円</button></div>
@@ -107,6 +109,7 @@
           </div>
           <canvas id="turn-shape" class="turn-shape"></canvas>
           <p class="timing-summary" id="timing-summary"></p>
+          </div>
         </div>
         <p class="hint live-legend"><span class="dot model"></span>お手本　<span class="dot user"></span>あなた　縦線が人形の今の局面です。●は今のコマの値、線は複数ターンの平均です。</p>
       </div>
