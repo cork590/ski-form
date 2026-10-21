@@ -171,21 +171,19 @@ export async function findPeople(video, { tiles = true } = {}) {
     .map((b) => ({ x: b.x / W, y: b.y / H, w: b.w / W, h: b.h / H }));
 }
 
-// 骨格の中心と大きさが、直前に認めた骨格から急に変わっていないか。
-// 物体検出の枠は板やストックを含むため骨格より大きい。大きさは「前のコマの骨格」とだけ比べる
-function isSamePerson(full, roi, W, H, framesSince = 1, prevSkelH = 0) {
+// 返ってきた骨格が、追跡中の人のものか。
+// 切り出しは追跡中の人を中心にしているので、骨格の中心が切り出し範囲の中央付近にあり、
+// 大きさが人物の枠（板やストックを含むので骨格より大きめ）と大きく違わなければ同じ人とみなす。
+// ※前のコマの骨格の大きさと比べる方式は、一度小さく誤検出すると正しい骨格まで捨て続けたのでやめた
+function isSamePerson(full, roi, W, H) {
   const vis = full.filter((p) => p[2] > 0.3);
   if (vis.length < 6) return true;
   const xs = vis.map((p) => p[0] * W), ys = vis.map((p) => p[1] * H);
   const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
   const h = Math.max(...ys) - Math.min(...ys);
-  const k = Math.max(1, Math.min(6, framesSince));
-  const ref = prevSkelH || roi.h;
-  const moved = Math.hypot(cx - roi.cx, cy - roi.cy) / ref;
-  if (moved >= 0.6 * k) return false;
-  if (!prevSkelH) return true;
-  const grew = h / prevSkelH;
-  return grew < 1 + 0.35 * k && grew > 1 / (1 + 0.35 * k);
+  const offCenter = Math.hypot(cx - roi.cx, cy - roi.cy) / roi.size;
+  const ratio = h / roi.h;
+  return offCenter < 0.3 && ratio > 0.35 && ratio < 1.8;
 }
 
 const roiFromBox = (b) => ({ cx: b.x + b.w / 2, cy: b.y + b.h / 2, size: Math.max(b.w, b.h) * MARGIN, h: b.h });
@@ -297,8 +295,7 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
           const l = res.landmarks?.[0], w = res.worldLandmarks?.[0];
           return l && w ? { lm: l, wl: w, full: l.map((p) => [(x0 + p.x * roi.size) / W, (y0 + p.y * roi.size) / H, p.visibility ?? 1]) } : null;
         };
-        const since = st.lastIdx == null ? 1 : Math.abs(i - st.lastIdx);
-        const ok = (r) => r && isSamePerson(r.full, roi, W, H, since, st.skelH);
+        const ok = (r) => r && isSamePerson(r.full, roi, W, H);
         let r = toFull(pose.detectForVideo(crop, ts));
         if (!ok(r)) {
           const retry = toFull(poseImage.detect(crop));
@@ -322,7 +319,6 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
           if (vis.length >= 8) {
             const xs = vis.map((p) => p[0] * W), ys = vis.map((p) => p[1] * H);
             const box = { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
-            st.skelH = st.skelH ? st.skelH * 0.5 + box.h * 0.5 : box.h;
             const next = roiFromBox(box);
             // 急な拡大縮小を抑える（骨格の誤検出で範囲が暴れないように）
             // 1コマ（1/15秒）で人物の大きさはほとんど変わらないので、変化を1割までに抑える
