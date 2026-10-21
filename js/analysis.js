@@ -281,7 +281,7 @@ export function analyzeSession(pose) {
   const warnings = [];
   const inRange = frames.filter((f) => f.status !== 'skip');
   // 'gap' は再生しながら取り込んだときに取りこぼしたコマ。前後から補間できるので有効とみなす
-  const validRatio = inRange.filter((f) => f.wl || f.status === 'gap').length / (inRange.length || 1);
+  const validRatio = inRange.filter((f) => f.wl || f.status === 'gap' || f.predicted).length / (inRange.length || 1);
   const wl = fillGaps(frames, 'wl');
   if (!wl) throw new Error('動画から人物を検出できませんでした。全身が映っている動画を使ってください。');
   const quality = frameQuality(frames, fps);
@@ -298,7 +298,7 @@ export function analyzeSession(pose) {
   }
 
   // 骨格を検出できなかった区間（補間しただけのコマ）が多いターンは使わない
-  const valid = frames.map((f) => !!f.wl || f.status === 'gap');
+  const valid = frames.map((f) => !!f.wl || f.status === 'gap' || !!f.predicted);
   const pass = (seq) => {
     const raw = seq.map(frameMetrics);
     const lateral = smooth1d(raw.map((m) => m.legLateral), 7);

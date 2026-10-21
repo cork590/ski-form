@@ -45,7 +45,7 @@ function drawOverlay(ctx, w, h, f) {
     ctx.strokeRect(f.roi[0] * w, f.roi[1] * h, f.roi[2] * w, f.roi[3] * h);
     ctx.restore();
   }
-  if (f && f.status && f.status !== 'ok' && f.status !== 'gap') {
+  if (f && f.status && f.status !== 'ok' && f.status !== 'gap' && !f.predicted) {
     const msg = { small: '人物が小さすぎるため解析していません', skip: '解析範囲外' }[f.status] ?? '人物が見つかりません';
     ctx.font = '600 13px system-ui, sans-serif';
     const tw = ctx.measureText(msg).width;
@@ -58,6 +58,18 @@ function drawOverlay(ctx, w, h, f) {
   const lm = f?.lm;
   if (!lm) return;
   const left = cssVar('--bone-left'), right = cssVar('--bone-right');
+  // 前後のコマから予測した骨格は、点線・半透明で区別する
+  if (f.predicted) {
+    ctx.save();
+    ctx.globalAlpha = 0.6;
+    ctx.setLineDash([5, 4]);
+    ctx.font = '600 12px system-ui, sans-serif';
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+    ctx.fillRect(8, 8, 116, 24);
+    ctx.fillStyle = '#ffffff';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('予測（前後のコマから）', 14, 20);
+  }
   ctx.lineWidth = 3;
   ctx.lineCap = 'round';
   for (const [a, b] of BONES) {
@@ -75,6 +87,7 @@ function drawOverlay(ctx, w, h, f) {
     ctx.arc(lm[k][0] * w, lm[k][1] * h, 3, 0, Math.PI * 2);
     ctx.fill();
   }
+  if (f.predicted) ctx.restore();
 }
 
 /** 動画の再生位置に合わせて骨格を描き続ける。戻り値を呼ぶと停止。 */

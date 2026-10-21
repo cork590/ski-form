@@ -200,6 +200,37 @@ function isSamePerson(full, roi, W, H) {
   return offCenter < 0.3 && ratio > 0.35 && ratio < 1.8;
 }
 
+// 解析後の仕上げ：
+//  1. 骨格のブレをならす（連続して検出できたコマの間で、前後1コマとの平均をとる）
+//  2. 骨格を取れなかった短い区間（最大10コマ＝約0.7秒）を、前後のコマから予測して埋める（predicted: true）
+const MAX_PREDICT = 10;
+function finalizeFrames(frames, first, last) {
+  const ok = (f) => f && f.status === 'ok' && f.lm;
+  const lerp = (a, b, t) => a.map((p, k) => p.map((v, d) => r4(v + (b[k][d] - v) * t)));
+  const smoothed = frames.map((f, i) => {
+    if (!ok(f) || i <= first || i >= last || !ok(frames[i - 1]) || !ok(frames[i + 1])) return f.lm;
+    return f.lm.map((p, k) => p.map((v, d) => (d === 2 ? v : r4((frames[i - 1].lm[k][d] + v * 2 + frames[i + 1].lm[k][d]) / 4))));
+  });
+  smoothed.forEach((lm, i) => { if (frames[i].lm) frames[i].lm = lm; });
+
+  let prev = -1;
+  for (let i = first; i <= last; i++) {
+    if (!ok(frames[i])) continue;
+    const gap = i - prev - 1;
+    if (prev >= 0 && gap > 0 && gap <= MAX_PREDICT) {
+      for (let k = prev + 1; k < i; k++) {
+        const t = (k - prev) / (i - prev);
+        const f = frames[k];
+        if (f.status === 'small') continue;
+        f.lm = lerp(frames[prev].lm, frames[i].lm, t);
+        f.wl = f.wl ?? lerp(frames[prev].wl, frames[i].wl, t);
+        f.predicted = true;
+      }
+    }
+    prev = i;
+  }
+}
+
 const roiFromBox = (b) => ({ cx: b.x + b.w / 2, cy: b.y + b.h / 2, size: Math.max(b.w, b.h) * MARGIN, h: b.h });
 
 /**
@@ -359,11 +390,18 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
     let mode = 'seek';
     let rejected = 0, noPose = 0, retried = 0; // 診断用：別人と判断して捨てた数／骨格が返ってこなかった数
     let gaps = 0;
+    // 取り込む画像は長い辺を1920pxまでに縮小する（大きな動画で iPhone の取り込みが追いつかないため）
+    const capScale = Math.min(1, 1920 / Math.max(W, H));
     const cap = document.createElement('canvas');
-    cap.width = W;
-    cap.height = H;
+    cap.width = Math.round(W * capScale);
+    cap.height = Math.round(H * capScale);
     const capCtx = cap.getContext('2d');
-    const captureRange = (fromIdx, toIdx) => new Promise((resolve) => {
+    // 解析時は元の大きさに戻して使う（切り出し位置の計算を元の動画の座標のままにするため）
+    const full = document.createElement('canvas');
+    full.width = W;
+    full.height = H;
+    const fullCtx = full.getContext('2d');
+    const captureRange = (fromIdx, toIdx, rate) => new Promise((resolve) => {
       const blobs = new Map();
       let lastIdx = fromIdx - 1;
       let finished = false;
@@ -382,13 +420,14 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
         const i = Math.round(meta.mediaTime * fps);
         if (i > lastIdx && i <= toIdx) {
           video.pause();
-          capCtx.drawImage(video, 0, 0, W, H);
+          capCtx.drawImage(video, 0, 0, cap.width, cap.height);
           const blob = await new Promise((r) => cap.toBlob(r, 'image/jpeg', 0.92));
           if (blob) blobs.set(i, blob);
           lastIdx = i;
           onProgress((i - fromIdx + 1) / (toIdx - fromIdx + 1), `動画を取り込み中… ${i - fromIdx + 1} / ${toIdx - fromIdx + 1}`);
           if (i >= toIdx) { finish(); return; }
           video.requestVideoFrameCallback(onFrame);
+          video.playbackRate = rate;
           video.play().catch(finish);
           return;
         }
@@ -401,6 +440,7 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
         await once(video, 'seeked');
         video.requestVideoFrameCallback(onFrame);
         arm();
+        video.playbackRate = rate;
         try { await video.play(); } catch { finish(); }
       })();
     });
@@ -413,10 +453,11 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
     let analyze = step;
     let blobs = null;
     if (usePlayback(video)) {
-      // 再生が始まらない・途中で止まることがまれにあるので、8割以上取り込めるまで2回までやり直す
+      // 取りこぼしが多いときは、再生を遅くして（1/2→1/4→1/8）やり直す。8割以上取り込めたら終わり
       const need = (last - first + 1) * 0.8;
-      for (let attempt = 0; attempt < 3 && !(blobs && blobs.size >= need); attempt++) {
-        const got = await captureRange(first, last);
+      for (const rate of [0.5, 0.25, 0.125]) {
+        if (blobs && blobs.size >= need) break;
+        const got = await captureRange(first, last, rate);
         if (!blobs || got.size > blobs.size) blobs = got;
       }
     }
@@ -436,10 +477,11 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
         const blob = nearest(i);
         if (!blob) { frames[i] = { ...frames[i], status: 'gap' }; done++; return; }
         const bmp = await createImageBitmap(blob);
-        src = bmp;
+        fullCtx.drawImage(bmp, 0, 0, W, H);
+        bmp.close();
+        src = full;
         process(i, st);
         src = video;
-        bmp.close();
       };
     }
     // PC と iPhone で同じ手順：選んだ場面から最後まで、続いて選んだ場面から範囲の始めへさかのぼる
@@ -448,12 +490,14 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
     const backward = { roi: startRoi(), sinceDetect: 0 };
     for (let i = start - 1; i >= first; i--) await analyze(i, backward);
     tsBase = ts + 1000;
+    finalizeFrames(frames, first, last);
+    const predicted = frames.filter((f) => f.predicted).length;
     return {
       fps, duration, width: W, height: H, frames, range: [first / fps, last / fps],
       diag: {
         seconds: Math.round((performance.now() - startedAt) / 100) / 10,
         pose: diagnostics.pose, detector: diagnostics.detector,
-        frameCallback: frameCallbackWorks, samples, stale, mode, gaps, rejected, noPose, retried,
+        frameCallback: frameCallbackWorks, samples, stale, mode, gaps, rejected, noPose, retried, predicted,
       },
     };
   } finally {
