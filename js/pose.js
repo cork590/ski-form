@@ -283,6 +283,8 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
       const frame = { t, lm: null, wl: null, size: roi ? r4(roi.h / H) : 0, roi: null, status: 'none', img: thumb.toDataURL('image/jpeg', 0.7) };
       if (roi && roi.h / H < MIN_PERSON) {
         frame.status = 'small';
+        // 人物が近づいて大きくなったらすぐ解析できるよう、小さいうちは毎コマ探し直す
+        st.sinceDetect = REDETECT_EVERY;
       } else if (roi) {
         const x0 = roi.cx - roi.size / 2, y0 = roi.cy - roi.size / 2;
         cropCtx.fillStyle = '#808080';
