@@ -132,7 +132,8 @@ async function seekTo(video, t) {
 // 画面全体で人物を探し、見つからなければ重なりのあるタイルに分けて探す（小さな人物向け）
 const frameCanvas = document.createElement('canvas');
 
-function detectPeople(detector, video, W, H, tileCanvas, tiles = true) {
+// video には縮小した画像を渡すこともできる（srcScale = 渡した画像の大きさ ÷ 元の動画の大きさ）。返す枠は元の動画の座標
+function detectPeople(detector, video, W, H, tileCanvas, tiles = true, srcScale = 1) {
   const boxes = [];
   const collect = (res, ox, oy, sx, sy) => {
     for (const d of res.detections) {
@@ -156,7 +157,7 @@ function detectPeople(detector, video, W, H, tileCanvas, tiles = true) {
   for (let y = 0; y < H; y += t * 0.75) {
     for (let x = 0; x < W; x += t * 0.75) {
       const ox = Math.min(x, W - t), oy = Math.min(y, H - t);
-      ctx.drawImage(video, ox, oy, t, t, 0, 0, tileCanvas.width, tileCanvas.height);
+      ctx.drawImage(video, ox * srcScale, oy * srcScale, t * srcScale, t * srcScale, 0, 0, tileCanvas.width, tileCanvas.height);
       collect(detector.detect(tileCanvas), ox, oy, s, s);
     }
   }
@@ -293,6 +294,7 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
 
     // 解析するコマの画像。通常は video、iPhone では取り込んでおいた画像（ImageBitmap）
     let src = video;
+    let srcScale = 1; // src の大きさ ÷ 元の動画の大きさ
 
     // 画像が前のコマから変わっていなければ数える（iPhone で起きる問題の確認用）
     const checkStale = () => {
@@ -317,7 +319,7 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
       if (SLOW_MS) { const end = performance.now() + SLOW_MS; while (performance.now() < end); }
 
       if (!st.roi || st.sinceDetect >= REDETECT_EVERY) {
-        const person = pickPerson(detectPeople(detector, src, W, H, tileCanvas), st.roi);
+        const person = pickPerson(detectPeople(detector, src, W, H, tileCanvas, true, srcScale), st.roi);
         if (person) st.roi = roiFromBox(person);
         else if (!st.roi || st.sinceDetect >= REDETECT_EVERY * 2) st.roi = null;
         st.sinceDetect = 0;
@@ -335,7 +337,7 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
         const x0 = roi.cx - roi.size / 2, y0 = roi.cy - roi.size / 2;
         cropCtx.fillStyle = '#808080';
         cropCtx.fillRect(0, 0, CROP, CROP);
-        cropCtx.drawImage(src, x0, y0, roi.size, roi.size, 0, 0, CROP, CROP);
+        cropCtx.drawImage(src, x0 * srcScale, y0 * srcScale, roi.size * srcScale, roi.size * srcScale, 0, 0, CROP, CROP);
         if (samples.length < 4 && i % 40 === 0) samples.push(crop.toDataURL('image/jpeg', 0.6));
         ts += Math.round(1000 / fps);
         // 切り出し画像内の座標 → 元の動画の座標（0〜1）
@@ -396,13 +398,10 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
     cap.width = Math.round(W * capScale);
     cap.height = Math.round(H * capScale);
     const capCtx = cap.getContext('2d');
-    // 解析時は元の大きさに戻して使う（切り出し位置の計算を元の動画の座標のままにするため）
-    const full = document.createElement('canvas');
-    full.width = W;
-    full.height = H;
-    const fullCtx = full.getContext('2d');
-    const captureRange = (fromIdx, toIdx, rate) => new Promise((resolve) => {
-      const blobs = new Map();
+    // fromIdx〜toIdx を rate 倍速で再生し、まだ取り込んでいないコマを blobs に追加する
+    const work = document.createElement('canvas');
+    const workCtx = work.getContext('2d');
+    const captureRange = (fromIdx, toIdx, rate, blobs, label) => new Promise((resolve) => {
       let lastIdx = fromIdx - 1;
       let finished = false;
       const finish = () => {
@@ -418,13 +417,14 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
         if (finished) return;
         arm();
         const i = Math.round(meta.mediaTime * fps);
+        if (i > lastIdx && i <= toIdx && blobs.has(i)) lastIdx = i; // 取り込み済みは止めずに進む
         if (i > lastIdx && i <= toIdx) {
           video.pause();
           capCtx.drawImage(video, 0, 0, cap.width, cap.height);
           const blob = await new Promise((r) => cap.toBlob(r, 'image/jpeg', 0.92));
           if (blob) blobs.set(i, blob);
           lastIdx = i;
-          onProgress((i - fromIdx + 1) / (toIdx - fromIdx + 1), `動画を取り込み中… ${i - fromIdx + 1} / ${toIdx - fromIdx + 1}`);
+          onProgress(blobs.size / (last - first + 1), `${label}… ${blobs.size} / ${last - first + 1}`);
           if (i >= toIdx) { finish(); return; }
           video.requestVideoFrameCallback(onFrame);
           video.playbackRate = rate;
@@ -452,15 +452,25 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
       : null);
     let analyze = step;
     let blobs = null;
+    let captureSec = 0;
     if (usePlayback(video)) {
-      // 取りこぼしが多いときは、再生を遅くして（1/2→1/4→1/8）やり直す。8割以上取り込めたら終わり
-      const need = (last - first + 1) * 0.8;
-      for (const rate of [0.5, 0.25, 0.125]) {
-        if (blobs && blobs.size >= need) break;
-        const got = await captureRange(first, last, rate);
-        if (!blobs || got.size > blobs.size) blobs = got;
+      const t0 = performance.now();
+      blobs = new Map();
+      // まず1/2倍速で全体を取り込み（等倍だと小さい人物の検出が少し落ちる）、取りこぼしたコマだけを、さらに遅く再生して取り込み直す
+      await captureRange(first, last, 0.5, blobs, '動画を取り込み中');
+      for (const rate of [0.25, 0.1]) {
+        const runs = [];
+        for (let i = first; i <= last; i++) {
+          if (blobs.has(i)) continue;
+          if (runs.length && runs.at(-1)[1] === i - 1) runs.at(-1)[1] = i;
+          else runs.push([i, i]);
+        }
+        if (!runs.length) break;
+        for (const [a, b] of runs) await captureRange(Math.max(first, a - 1), b, rate, blobs, '取りこぼしたコマを取り込み直し中');
       }
+      captureSec = Math.round((performance.now() - t0) / 100) / 10;
     }
+    const analyzeStart = performance.now();
     if (blobs && blobs.size) {
       mode = 'capture';
       // 取りこぼしたコマは、一番近い取り込み済みのコマで代用する
@@ -476,12 +486,16 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
       analyze = async (i, st) => {
         const blob = nearest(i);
         if (!blob) { frames[i] = { ...frames[i], status: 'gap' }; done++; return; }
+        // 取り込んだ縮小画像をそのまま使う（元の大きさに戻すと iPhone では時間がかかる）
         const bmp = await createImageBitmap(blob);
-        fullCtx.drawImage(bmp, 0, 0, W, H);
+        work.width = bmp.width; work.height = bmp.height;
+        workCtx.drawImage(bmp, 0, 0);
         bmp.close();
-        src = full;
+        src = work;
+        srcScale = capScale;
         process(i, st);
         src = video;
+        srcScale = 1;
       };
     }
     // PC と iPhone で同じ手順：選んだ場面から最後まで、続いて選んだ場面から範囲の始めへさかのぼる
@@ -498,6 +512,7 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
         seconds: Math.round((performance.now() - startedAt) / 100) / 10,
         pose: diagnostics.pose, detector: diagnostics.detector,
         frameCallback: frameCallbackWorks, samples, stale, mode, gaps, rejected, noPose, retried, predicted,
+        captureSec, analyzeSec: Math.round((performance.now() - analyzeStart) / 100) / 10,
       },
     };
   } finally {

@@ -776,7 +776,7 @@ async function renderResults({ model, modelAna, userFile, userPose, userAna, res
       for (const f of pose.frames) if (f.status !== 'skip') c[f.status] = (c[f.status] || 0) + 1;
       const sizes = pose.frames.filter((f) => f.status === 'ok').map((f) => f.size).sort((a, b) => a - b);
       const med = sizes.length ? Math.round(sizes[Math.floor(sizes.length / 2)] * 100) : 0;
-      return `${label}: ${pose.width}x${pose.height} 範囲${pose.range ? pose.range.map((x) => x.toFixed(1)).join('-') : 'なし'}/${pose.duration.toFixed(1)}秒 計算=${d.pose}/${d.detector} 検出${c.ok || 0} 見失い${c.none || 0} 小さすぎ${c.small || 0} 人物の大きさ中央値${med}% 時間${d.seconds}秒 方式${d.mode ?? '不明'} 取りこぼし${d.gaps ?? 0} 予測で補完${d.predicted ?? 0} 画像が更新されないコマ${d.stale ?? '不明'} ターン${ana.turns.length} 傾き補正${ana.cameraRoll.toFixed(1)}`;
+      return `${label}: ${pose.width}x${pose.height} 範囲${pose.range ? pose.range.map((x) => x.toFixed(1)).join('-') : 'なし'}/${pose.duration.toFixed(1)}秒 計算=${d.pose}/${d.detector} 検出${c.ok || 0} 見失い${c.none || 0} 小さすぎ${c.small || 0} 人物の大きさ中央値${med}% 時間${d.seconds}秒（取り込み${d.captureSec ?? 0}・解析${d.analyzeSec ?? '?'}） 方式${d.mode ?? '不明'} 取りこぼし${d.gaps ?? 0} 予測で補完${d.predicted ?? 0} 画像が更新されないコマ${d.stale ?? '不明'} ターン${ana.turns.length} 傾き補正${ana.cameraRoll.toFixed(1)}`;
     };
     const text = [
       `v${VERSION} ${navigator.userAgent}`,
