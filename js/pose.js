@@ -124,6 +124,8 @@ async function seekTo(video, t) {
 }
 
 // 画面全体で人物を探し、見つからなければ重なりのあるタイルに分けて探す（小さな人物向け）
+const frameCanvas = document.createElement('canvas');
+
 function detectPeople(detector, video, W, H, tileCanvas, tiles = true) {
   const boxes = [];
   const collect = (res, ox, oy, sx, sy) => {
@@ -132,7 +134,13 @@ function detectPeople(detector, video, W, H, tileCanvas, tiles = true) {
       boxes.push({ x: ox + b.originX * sx, y: oy + b.originY * sy, w: b.width * sx, h: b.height * sy, score: d.categories[0].score });
     }
   };
-  collect(detector.detect(video), 0, 0, 1, 1);
+  // 動画をそのままAIに渡すと、iPhone では前の場面の画像が使われることがあるため、
+  // いったん canvas に描き写してから渡す（長い辺を1280pxまでに縮小）
+  const scale = Math.min(1, 1280 / Math.max(W, H));
+  frameCanvas.width = Math.round(W * scale);
+  frameCanvas.height = Math.round(H * scale);
+  frameCanvas.getContext('2d').drawImage(video, 0, 0, frameCanvas.width, frameCanvas.height);
+  collect(detector.detect(frameCanvas), 0, 0, 1 / scale, 1 / scale);
   if (boxes.length || !tiles) return boxes;
 
   const t = Math.round(Math.min(W, H) * 0.6);
