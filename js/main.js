@@ -2,7 +2,7 @@ import { listModels, getModel, saveModel, deleteModel } from './db.js';
 import { extractPose, findPeople, MIN_PERSON, SMALL_PERSON, showCurrentFrame } from './pose.js';
 import { fitCanvas, containRect } from './draw.js';
 import { analyzeSession, compare, METRICS, PHASES, turnRelative } from './analysis.js';
-import { attachSkeleton, drawProfileChart, createFlipbook, drawTimingChart, turnPhaseName } from './draw.js';
+import { attachSkeleton, drawProfileChart, createFlipbook, drawTimingChart, turnPhaseName, drawTurnShape } from './draw.js';
 import { createViewer } from './viewer3d.js';
 import { IS_BETA, VERSION } from './config.js';
 import { resolveSlope } from './terrain.js';
@@ -652,6 +652,16 @@ async function renderResults({ model, modelAna, userFile, userPose, userAna, res
         : '谷回りと山回りの配分は、お手本とほぼ同じです。');
   }
   let lastTimingKey = '';
+  let shape = 'fig8';
+  let lastSt = null;
+  $('shape-buttons').onclick = (ev) => {
+    const b = ev.target.closest('button');
+    if (!b) return;
+    $('shape-buttons').querySelectorAll('button').forEach((x) => x.classList.toggle('active', x === b));
+    shape = b.dataset.shape;
+    lastTimingKey = '';
+    if (lastSt) drawTiming(lastSt);
+  };
   const drawTiming = (st) => {
     if (!ut || !mt) return;
     const average = st.source === 'average';
@@ -659,9 +669,14 @@ async function renderResults({ model, modelAna, userFile, userPose, userAna, res
       timingRow('お手本', cssVarValue('--series-model'), average ? null : st.mTurn, mt, modelAna.fps),
       timingRow('あなた', cssVarValue('--series-user'), average ? null : st.uTurn, ut, userAna.fps),
     ];
-    const key = [st.phase.toFixed(3), rows.map((r) => r.fallFrac.toFixed(3)).join(), $('timing-chart').clientWidth].join('|');
+    lastSt = st;
+    const key = [st.phase.toFixed(3), st.sign, shape, rows.map((r) => r.fallFrac.toFixed(3)).join(), $('timing-chart').clientWidth].join('|');
     if (key === lastTimingKey) return;
     lastTimingKey = key;
+    drawTurnShape($('turn-shape'), [
+      { label: 'お手本', color: rows[0].color, bySign: mt.bySign, now: st.sign ? { sign: st.sign, phase: st.phase } : null },
+      { label: 'あなた', color: rows[1].color, bySign: ut.bySign, now: st.sign ? { sign: st.sign, phase: st.phase } : null },
+    ], shape);
     drawTimingChart($('timing-chart'), rows, st.phase);
     $('timing-now').textContent = `今：お手本 ${turnPhaseName(st.phase, rows[0].fallFrac)} ／ あなた ${turnPhaseName(st.phase, rows[1].fallFrac)}`;
   };

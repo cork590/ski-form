@@ -101,6 +101,11 @@
         <div class="timing" id="timing">
           <div class="timing-head"><b>ターンのタイミング比較（谷回り・山回り）</b><span id="timing-now"></span></div>
           <canvas id="timing-chart" class="timing-chart"></canvas>
+          <div class="shape-head">
+            <div class="seg" id="shape-buttons"><button data-shape="fig8" class="active">8の字</button><button data-shape="circle">円</button></div>
+            <span class="hint shape-legend">外側＝お手本（灰）・内側＝あなた（青）／ 濃い線＝谷回り・薄い線＝山回り・○＝フォールライン・大きい点＝今の位置</span>
+          </div>
+          <canvas id="turn-shape" class="turn-shape"></canvas>
           <p class="timing-summary" id="timing-summary"></p>
         </div>
         <p class="hint live-legend"><span class="dot model"></span>お手本　<span class="dot user"></span>あなた　縦線が人形の今の局面です。●は今のコマの値、線は複数ターンの平均です。</p>

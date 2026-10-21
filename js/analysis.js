@@ -371,10 +371,18 @@ export function analyzeSession(pose) {
 
   // 谷回り・山回りのタイミング：各ターンでフォールライン（板と腰の向きが斜面の真下を向く瞬間）を求める
   if (!fallback) markFallLines(turns, lateral, hipYaw, footYaw, valid);
+  const summarize = (list) => ({
+    fallFrac: mean(list.map((t) => t.fallFrac)),
+    valleySec: mean(list.map((t) => (t.fall - t.start) / fps)),
+    mountainSec: mean(list.map((t) => (t.end - t.fall) / fps)),
+  });
   const timing = fallback ? null : {
-    fallFrac: mean(turns.map((t) => t.fallFrac)),
-    valleySec: mean(turns.map((t) => (t.fall - t.start) / fps)),
-    mountainSec: mean(turns.map((t) => (t.end - t.fall) / fps)),
+    ...summarize(turns),
+    // 右ターン（+1）・左ターン（-1）別。片方しかなければ全体の平均で代用
+    bySign: Object.fromEntries([1, -1].map((s) => {
+      const list = turns.filter((t) => t.sign === s);
+      return [s, summarize(list.length ? list : turns)];
+    })),
   };
   const motion = motions.length ? {
     speed: median(motions.map((m) => m.speed)),
