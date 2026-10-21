@@ -67,14 +67,8 @@ function poseAt(poses, fi) {
 // あなたの各フレームに、同じ向き・同じ局面のお手本フレームを対応させる
 function buildTimeline(model, user) {
   const entries = [];
-  if (model.fallback || user.fallback) {
-    const N = user.wl.length, M = model.wl.length;
-    for (let i = 0; i < N; i++) {
-      const p = i / Math.max(1, N - 1);
-      entries.push({ ui: i, mi: p * (M - 1), turn: -1, phase: p, sign: 0 });
-    }
-    return entries;
-  }
+  // ターンを検出できなかった（fallback）場合も、turns には解析できた区間が1つ入っている。
+  // 動画全体ではなく、その区間だけを再生する（範囲外は骨格がなく、人形が止まって見えるため）
   const bySign = { 1: model.turns.filter((t) => t.sign > 0), [-1]: model.turns.filter((t) => t.sign < 0) };
   const count = { 1: 0, [-1]: 0 };
   user.turns.forEach((t, k) => {
@@ -319,9 +313,9 @@ export function createViewer({ canvas, model, user, info, seek, playBtn, speedSe
       info.textContent = `平均した${side}ターン（あなた：${n(e.uCount)}／お手本：${n(e.mCount)}）・ ${phaseName(e.phase)}`;
       return;
     }
-    info.textContent = e.turn >= 0
-      ? `ターン ${e.turn + 1} / ${user.turns.length}（${e.sign > 0 ? '右' : '左'}ターン）・ ${phaseName(e.phase)}`
-      : `動画全体の ${Math.round(e.phase * 100)}%`;
+    info.textContent = user.fallback || model.fallback
+      ? `解析した区間の ${Math.round(e.phase * 100)}%（ターンの切り替えを検出できなかったため、局面は合わせていません）`
+      : `ターン ${e.turn + 1} / ${user.turns.length}（${e.sign > 0 ? '右' : '左'}ターン）・ ${phaseName(e.phase)}`;
   }
 
   function frame(ts) {

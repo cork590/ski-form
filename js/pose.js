@@ -93,6 +93,10 @@ export async function showCurrentFrame(video) {
   if (!IS_IOS || !video.paused || !video.src || video.nudging) return;
   video.nudging = true; // この間の play/pause/timeupdate は利用者の操作として扱わない
   const t = video.currentTime;
+  // この間に利用者がスライダーを動かしたら、その位置を優先する（元の位置に戻さない）
+  let userSeeked = false;
+  const onSeeking = () => { userSeeked = true; };
+  video.addEventListener('seeking', onSeeking);
   try {
     const shown = new Promise((resolve) => {
       const timer = setTimeout(resolve, 300);
@@ -102,8 +106,9 @@ export async function showCurrentFrame(video) {
     await shown;
   } catch {}
   video.pause();
+  video.removeEventListener('seeking', onSeeking);
   // 再生で少し進んだ分は気にしない（1コマ未満）。大きく進んだときだけ戻す
-  if (Math.abs(video.currentTime - t) > 0.1) video.currentTime = t;
+  if (!userSeeked && Math.abs(video.currentTime - t) > 0.1) video.currentTime = t;
   setTimeout(() => { video.nudging = false; }, 50);
 }
 
