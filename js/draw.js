@@ -154,6 +154,18 @@ export function createFlipbook(canvas, pose, { isSkeletonVisible, isZoom = () =>
   // 再生中は元の動画をなめらかに描き、骨格とズーム範囲はコマの間を補間する（usingVideo）。
   // 止まっている間は解析したコマの画像を表示する（iPhone でシーク後の画像が更新されない問題を避けるため）
   let usingVideo = false;
+  // 実際に画面に出たコマの時刻（requestVideoFrameCallback）。video.currentTime は iPhone で表示より遅れることがあり、
+  // そのまま使うと骨格と映像の脚の動きがずれて「足踏み」しているように見える
+  let shownTime = null;
+  const watchFrames = () => {
+    if (!video?.requestVideoFrameCallback) return;
+    video.requestVideoFrameCallback((_now, meta) => {
+      if (!usingVideo) return;
+      shownTime = meta.mediaTime;
+      dirty = true;
+      watchFrames();
+    });
+  };
   const lerpArr = (a, b, t) => a.map((v, k) => (Array.isArray(v) ? lerpArr(v, b[k], t) : v + (b[k] - v) * t));
   const at = (key, p) => {
     const i0 = Math.floor(p), i1 = Math.min(last, i0 + 1), t = p - i0;
@@ -242,7 +254,7 @@ export function createFlipbook(canvas, pose, { isSkeletonVisible, isZoom = () =>
   const loop = (ts) => {
     raf = requestAnimationFrame(loop);
     if (state.playing && usingVideo) {
-      pos = Math.min(last, video.currentTime * pose.fps);
+      pos = Math.min(last, (shownTime ?? video.currentTime) * pose.fps);
       dirty = true;
       if (pos >= last || video.ended) {
         pos = last;
@@ -276,6 +288,8 @@ export function createFlipbook(canvas, pose, { isSkeletonVisible, isZoom = () =>
       state.playing = true;
       if (video?.src) {
         usingVideo = true;
+        shownTime = null;
+        watchFrames();
         video.currentTime = pos / pose.fps;
         video.playbackRate = r;
         // 動画を再生できないときは、コマの画像のパラパラ再生にする

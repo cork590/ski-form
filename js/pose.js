@@ -207,6 +207,51 @@ function isSamePerson(full, roi, W, H) {
 //  1. 骨格のブレをならす（連続して検出できたコマの間で、前後1コマとの平均をとる）
 //  2. 骨格を取れなかった短い区間（最大10コマ＝約0.7秒）を、前後のコマから予測して埋める（predicted: true）
 const MAX_PREDICT = 10;
+// 左右の取り違えを直す：AIはコマごとに左右の脚・腕を取り違えることがある（黒いウェアなどで起きやすい）。
+// 前のコマと比べて、左右を入れ替えた方が近ければ入れ替える。最後に、大半のコマで入れ替わっていたら全体を元に戻す
+const LR_GROUPS = [
+  [[25, 26], [27, 28], [29, 30], [31, 32]], // 脚（膝・足首・かかと・つま先）
+  [[13, 14], [15, 16], [17, 18], [19, 20], [21, 22]], // 腕
+];
+function fixLeftRight(frames, first, last) {
+  const ok = (f) => f && f.status === 'ok' && f.lm;
+  const swap = (f, pairs) => {
+    for (const arr of [f.lm, f.wl]) {
+      if (!arr) continue;
+      for (const [a, b] of pairs) [arr[a], arr[b]] = [arr[b], arr[a]];
+    }
+  };
+  const dist = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1]);
+  const cost = (A, B, pairs, crossed) => pairs.reduce((sum, [a, b]) => sum + (crossed
+    ? dist(A[a], B[b]) + dist(A[b], B[a])
+    : dist(A[a], B[a]) + dist(A[b], B[b])), 0);
+  let fixed = 0;
+  LR_GROUPS.forEach((pairs) => {
+    let ref = null;
+    const swapped = [];
+    for (let i = first; i <= last; i++) {
+      const f = frames[i];
+      if (!ok(f)) continue;
+      if (ref && cost(ref.lm, f.lm, pairs, true) < cost(ref.lm, f.lm, pairs, false) * 0.7) {
+        swap(f, pairs);
+        swapped.push(i);
+      }
+      ref = f;
+    }
+    const total = frames.slice(first, last + 1).filter(ok).length;
+    if (swapped.length > total / 2) {
+      // 最初のコマ側が取り違えていた：入れ替えなかったコマの方を入れ替えて、全体を多数派にそろえる
+      const set = new Set(swapped);
+      for (let i = first; i <= last; i++) if (ok(frames[i]) && !set.has(i)) swap(frames[i], pairs);
+      for (const i of swapped) swap(frames[i], pairs);
+      fixed += total - swapped.length;
+    } else {
+      fixed += swapped.length;
+    }
+  });
+  return fixed;
+}
+
 function finalizeFrames(frames, first, last) {
   const ok = (f) => f && f.status === 'ok' && f.lm;
   const lerp = (a, b, t) => a.map((p, k) => p.map((v, d) => r4(v + (b[k][d] - v) * t)));
@@ -517,6 +562,7 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
     const backward = { roi: startRoi(), sinceDetect: 0 };
     for (let i = start - 1; i >= first; i--) await analyze(i, backward);
     tsBase = ts + 1000;
+    const lrFixed = fixLeftRight(frames, first, last);
     finalizeFrames(frames, first, last);
     const predicted = frames.filter((f) => f.predicted).length;
     return {
@@ -524,7 +570,7 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
       diag: {
         seconds: Math.round((performance.now() - startedAt) / 100) / 10,
         pose: diagnostics.pose, detector: diagnostics.detector,
-        frameCallback: frameCallbackWorks, samples, stale, mode, gaps, rejected, noPose, retried, predicted,
+        frameCallback: frameCallbackWorks, samples, stale, mode, gaps, rejected, noPose, retried, predicted, lrFixed,
         captureSec, analyzeSec: Math.round((performance.now() - analyzeStart) / 100) / 10,
       },
     };
