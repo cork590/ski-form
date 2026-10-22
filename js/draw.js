@@ -119,11 +119,23 @@ export function attachSkeleton(video, canvas, pose, isVisible) {
  * 切り取った範囲のコマだけを持っているので、範囲外が映ることはなく、画像と骨格が必ず一致する。
  * iPhone の動画プレーヤーはシーク後の画像が更新されないことがあるため、こちらを使う。
  */
-export function createFlipbook(canvas, pose, { isSkeletonVisible, onChange = () => {} }) {
+export function createFlipbook(canvas, pose, { isSkeletonVisible, isZoom = () => false, onChange = () => {} }) {
   const [a, b] = pose.range ?? [0, pose.duration];
   const first = Math.max(0, Math.round(a * pose.fps));
   const last = Math.min(pose.frames.length - 1, Math.round(b * pose.fps));
   const images = new Map();
+  const zoomImages = new Map();
+  const zoomAt = (i) => {
+    const src = pose.frames[i]?.zoom;
+    if (!src) return null;
+    if (!zoomImages.has(i)) {
+      const img = new Image();
+      img.onload = () => { dirty = true; };
+      img.src = src;
+      zoomImages.set(i, img);
+    }
+    return zoomImages.get(i);
+  };
   const imageAt = (i) => {
     // 取りこぼしたコマ（画像なし）は、手前で一番近い画像を使う
     for (let k = i; k >= first; k--) {
@@ -150,13 +162,30 @@ export function createFlipbook(canvas, pose, { isSkeletonVisible, onChange = () 
   const draw = () => {
     const i = Math.round(pos);
     const visible = isSkeletonVisible();
-    const key = [i, visible, canvas.clientWidth, canvas.clientHeight].join('|');
+    const zoom = isZoom();
+    const key = [i, visible, zoom, canvas.clientWidth, canvas.clientHeight].join('|');
     if (!dirty && key === lastKey) return;
     dirty = false;
     lastKey = key;
     const { ctx, w: cw, h: ch } = fitCanvas(canvas);
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, cw, ch);
+    // 人物を追ってズーム：AIに渡した切り出し画像（人物が中央）を、骨格と一緒に大きく表示する
+    const f = pose.frames[i];
+    const zimg = zoom && f?.zoomRoi ? zoomAt(i) : null;
+    if (zimg) {
+      const zr = containRect(cw, ch, 1, 1);
+      if (zimg.complete && zimg.naturalWidth) ctx.drawImage(zimg, zr.x, zr.y, zr.w, zr.h);
+      if (visible) {
+        const [rx, ry, rw, rh] = f.zoomRoi;
+        const local = { ...f, roi: null, lm: f.lm?.map((p) => [(p[0] - rx) / rw, (p[1] - ry) / rh, p[2]]) };
+        ctx.save();
+        ctx.translate(zr.x, zr.y);
+        drawOverlay(ctx, zr.w, zr.h, local);
+        ctx.restore();
+      }
+      return;
+    }
     const r = containRect(cw, ch, pose.width, pose.height);
     const img = imageAt(i);
     if (img?.complete && img.naturalWidth) ctx.drawImage(img, r.x, r.y, r.w, r.h);

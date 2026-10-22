@@ -516,7 +516,11 @@ async function renderResults({ model, modelAna, userFile, userPose, userAna, res
         label.textContent = `${fb.time.toFixed(1)} / ${fb.length.toFixed(1)}秒`;
         playBtn.textContent = fb.playing ? '❚❚' : '▶';
       };
-      fb = createFlipbook(canvas, pose, { isSkeletonVisible: () => $('skeleton-toggle').checked, onChange: updateUI });
+      fb = createFlipbook(canvas, pose, {
+        isSkeletonVisible: () => $('skeleton-toggle').checked,
+        isZoom: () => $('zoom-toggle').checked,
+        onChange: updateUI,
+      });
       const toggle = () => (fb.playing ? fb.pause() : fb.play(1));
       playBtn.onclick = toggle;
       canvas.onclick = toggle;

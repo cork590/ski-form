@@ -16,7 +16,7 @@ const DETECT_MODEL = 'https://storage.googleapis.com/mediapipe-models/object_det
 const CROP = 512; // 切り出した画像の大きさ（px）
 const MARGIN = 1.6; // 人物の大きさに対する切り出し範囲の倍率
 const REDETECT_EVERY = 15; // 追跡中も、このコマ数ごとに物体検出で位置を確かめる
-export const MIN_PERSON = 0.04; // 人物の高さがこれ未満（画面比）だと小さすぎて解析しない
+export const MIN_PERSON = 0.02; // 人物の高さがこれ未満（画面比）だと小さすぎて解析しない（切り出して拡大するので2%程度までは骨格を取れる）
 export const SMALL_PERSON = 0.06; // これ未満は解析はするが精度が下がる
 
 let modelsPromise = null;
@@ -281,6 +281,10 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
     thumb.width = 360;
     thumb.height = Math.round((360 * H) / W);
     const thumbCtx = thumb.getContext('2d');
+    const ZOOM = 320;
+    const zoomCanvas = document.createElement('canvas');
+    zoomCanvas.width = zoomCanvas.height = ZOOM;
+    const zoomCtx = zoomCanvas.getContext('2d');
     const samples = []; // 診断用：AIに渡した切り出し画像の見本
 
     const total = Math.floor(duration * fps);
@@ -339,6 +343,10 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
         cropCtx.fillRect(0, 0, CROP, CROP);
         cropCtx.drawImage(src, x0 * srcScale, y0 * srcScale, roi.size * srcScale, roi.size * srcScale, 0, 0, CROP, CROP);
         if (samples.length < 4 && i % 40 === 0) samples.push(crop.toDataURL('image/jpeg', 0.6));
+        // 結果画面の「人物を追ってズーム」表示用に、切り出した画像（320px）と範囲を保存する
+        zoomCtx.drawImage(crop, 0, 0, ZOOM, ZOOM);
+        frame.zoom = zoomCanvas.toDataURL('image/jpeg', 0.75);
+        frame.zoomRoi = [x0 / W, y0 / H, roi.size / W, roi.size / H].map(r4);
         ts += Math.round(1000 / fps);
         // 切り出し画像内の座標 → 元の動画の座標（0〜1）
         const toFull = (res) => {
