@@ -398,6 +398,8 @@ export function analyzeSession(pose) {
   return {
     fps, raw, wl: smoothed, lateral, turns, profile, fallback, warnings, motion, validRatio,
     cameraRoll, slope: pose.slope ?? null, reliable,
+    // 骨格がある（補間できる）最初と最後のコマ
+    span: [Math.max(0, valid.indexOf(true)), Math.max(0, valid.lastIndexOf(true))],
     avgTurnDur: mean(turns.map((t) => (t.end - t.start) / fps)),
     timing,
   };

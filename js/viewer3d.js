@@ -82,19 +82,35 @@ function poseAt(poses, fi) {
 // あなたの各フレームに、同じ向き・同じ局面のお手本フレームを対応させる
 function buildTimeline(model, user) {
   const entries = [];
-  // ターンを検出できなかった（fallback）場合も、turns には解析できた区間が1つ入っている。
-  // 動画全体ではなく、その区間だけを再生する（範囲外は骨格がなく、人形が止まって見えるため）
+  // ターンを検出できなかった（fallback）場合も、turns には解析できた区間が1つ入っている
   const bySign = { 1: model.turns.filter((t) => t.sign > 0), [-1]: model.turns.filter((t) => t.sign < 0) };
   const count = { 1: 0, [-1]: 0 };
-  user.turns.forEach((t, k) => {
-    const pool = bySign[t.sign].length ? bySign[t.sign] : model.turns;
-    const mt = pool[count[t.sign]++ % pool.length];
-    const n = t.end - t.start;
-    for (let i = t.start; i < t.end; i++) {
-      const p = (i - t.start) / n;
-      entries.push({ ui: i, mi: mt.start + p * (mt.end - mt.start), turn: k, phase: p, sign: t.sign, ut: t, mt });
-    }
+  const pick = (sign) => {
+    const pool = bySign[sign]?.length ? bySign[sign] : model.turns;
+    return pool[count[sign]++ % pool.length];
+  };
+  const push = (i, mt, k, p, sign, ut, partial) => entries.push({
+    ui: i, mi: mt.start + Math.min(1, Math.max(0, p)) * (mt.end - mt.start), turn: k, phase: Math.min(1, Math.max(0, p)), sign, ut, mt, partial,
   });
+  const turns = user.turns;
+  // 最初の切り返しより前（前のターンの終わり）も、お手本の同じ向きのターンの同じ局面に合わせて再生する
+  const avgLen = Math.max(1, (user.avgTurnDur || 1) * user.fps);
+  const [s0, s1] = user.span ?? [turns[0].start, turns.at(-1).end];
+  if (!user.fallback && s0 < turns[0].start) {
+    const sign = -turns[0].sign, mt = pick(sign);
+    for (let i = s0; i < turns[0].start; i++) push(i, mt, -1, 1 - (turns[0].start - i) / avgLen, sign, null, 'pre');
+  }
+  turns.forEach((t, k) => {
+    const mt = pick(t.sign);
+    const n = t.end - t.start;
+    for (let i = t.start; i < t.end; i++) push(i, mt, k, (i - t.start) / n, t.sign, t, null);
+  });
+  // 最後の切り返しより後ろ（次のターンの始まり）も同じように再生する
+  const lastEnd = turns.at(-1).end;
+  if (!user.fallback && s1 > lastEnd) {
+    const sign = -turns.at(-1).sign, mt = pick(sign);
+    for (let i = lastEnd; i <= s1; i++) push(i, mt, turns.length, (i - lastEnd) / avgLen, sign, null, 'post');
+  }
   return entries;
 }
 
@@ -331,7 +347,9 @@ export function createViewer({ canvas, model, user, info, seek, playBtn, speedSe
     }
     info.textContent = user.fallback || model.fallback
       ? `解析した区間の ${Math.round(e.phase * 100)}%（ターンの切り替えを検出できなかったため、局面は合わせていません）`
-      : `ターン ${e.turn + 1} / ${user.turns.length}（${e.sign > 0 ? '右' : '左'}ターン）・ ${phaseName(e.phase)}`;
+      : e.partial
+        ? `${e.partial === 'pre' ? '最初の切り返しより前' : '最後の切り返しより後ろ'}（${e.sign > 0 ? '右' : '左'}ターンの途中）・ ${phaseName(e.phase)}`
+        : `ターン ${e.turn + 1} / ${user.turns.length}（${e.sign > 0 ? '右' : '左'}ターン）・ ${phaseName(e.phase)}`;
   }
 
   function frame(ts) {
