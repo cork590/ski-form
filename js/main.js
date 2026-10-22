@@ -116,17 +116,21 @@ function choosePerson(file) {
       const [a, b] = span();
       seek.value = String(Math.round(((t - a) / ((b - a) || 1)) * 1000));
     };
+    // スライダーの位置（秒）。範囲はこの値で決める。
+    // video.currentTime は iPhone の画像更新（一瞬の再生）やシーク中の遅れでずれることがあるため使わない
+    let sliderT = 0;
     const onSeek = () => {
       const [a, b] = span();
-      video.currentTime = a + (Number(seek.value) / 1000) * (b - a);
+      sliderT = a + (Number(seek.value) / 1000) * (b - a);
+      video.currentTime = sliderT;
     };
 
     const renderRange = () => {
       const d = video.duration || 1;
-      const [a, b] = step === 1 ? [video.currentTime, d] : step === 2 ? [range[0], video.currentTime] : range;
+      const [a, b] = step === 1 ? [sliderT, d] : step === 2 ? [range[0], sliderT] : range;
       $('trim-range').style.left = `${(a / d) * 100}%`;
       $('trim-range').style.width = `${(Math.max(0, b - a) / d) * 100}%`;
-      $('trim-label').textContent = `解析範囲：${a.toFixed(1)}〜${b.toFixed(1)}秒（${Math.max(0, b - a).toFixed(1)}秒間）・ 現在 ${video.currentTime.toFixed(1)}秒`;
+      $('trim-label').textContent = `解析範囲：${a.toFixed(1)}〜${b.toFixed(1)}秒（${Math.max(0, b - a).toFixed(1)}秒間）・ 現在 ${sliderT.toFixed(1)}秒`;
     };
 
     const draw = () => {
@@ -211,26 +215,28 @@ function choosePerson(file) {
       selected = null;
       // それぞれのステップで、最初に表示する場面
       const t = n === 1 ? range[0] : n === 2 ? range[1] : (range[0] + range[1]) / 2;
-      video.currentTime = Math.min(Math.max(0, t), Math.max(0, (video.duration || 0) - 0.05));
-      setSlider(video.currentTime);
+      sliderT = Math.min(Math.max(0, t), Math.max(0, (video.duration || 0) - 0.05));
+      video.currentTime = sliderT;
+      setSlider(sliderT);
+      renderRange();
       updateNext();
       draw();
     };
 
     const onNext = () => {
       if (step === 1) {
-        if (video.currentTime > video.duration - 1) {
+        if (sliderT > video.duration - 1) {
           status.textContent = '開始の場面が動画の最後に近すぎます。もう少し前の場面を選んでください。';
           return;
         }
-        range = [video.currentTime, Math.max(range[1], video.currentTime + 1)];
+        range = [sliderT, Math.max(range[1], sliderT + 1)];
         showStep(2);
       } else if (step === 2) {
-        if (video.currentTime < range[0] + 1) {
+        if (sliderT < range[0] + 1) {
           status.textContent = `終了の場面は、開始（${range[0].toFixed(1)}秒）より1秒以上あとにしてください。`;
           return;
         }
-        range = [range[0], video.currentTime];
+        range = [range[0], sliderT];
         showStep(3);
       } else if (selected) {
         finish({ target: selected, range, slopeChoice: $('pick-slope').value });
@@ -273,11 +279,12 @@ function choosePerson(file) {
         return;
       }
       // しきい値以上の区間のうち一番長いもの（1か所だけの途切れは許す）
-      const th = Math.max(SMALL_PERSON, maxS * 0.5);
+      // 解析できる大きさ（下限の1.5倍以上）で映っている区間をできるだけ長く選ぶ（1秒までの途切れは許す）
+      const th = MIN_PERSON * 1.5;
       let best = null, cur = null, gap = 0;
       sizes.forEach((s, k) => {
         if (s >= th) { cur = cur ? { ...cur, b: k } : { a: k, b: k }; gap = 0; }
-        else if (cur && gap === 0) { gap = 1; }
+        else if (cur && gap < 2) { gap++; }
         else { cur = null; gap = 0; }
         if (cur && (!best || cur.b - cur.a > best.b - best.a)) best = { ...cur };
       });
@@ -285,7 +292,7 @@ function choosePerson(file) {
       range = [Math.max(0, times[best.a] - 0.5), Math.min(d, times[best.b] + 0.5)];
       if (range[1] - range[0] < 1) range[1] = Math.min(d, range[0] + 1);
       showStep(3);
-      note = `人物が大きく映っている ${range[0].toFixed(1)}〜${range[1].toFixed(1)}秒 を選びました。${range[1] - range[0] < 4 ? '短い範囲なので、比べられるターンが少なくなります。' : ''}`;
+      note = `人物が解析できる大きさで映っている ${range[0].toFixed(1)}〜${range[1].toFixed(1)}秒 を選びました（変えたいときは「← 戻る」で調整できます）。${range[1] - range[0] < 4 ? '短い範囲なので、比べられるターンが少なくなります。' : ''}`;
       status.textContent = note;
     };
     const onClick = (e) => {
