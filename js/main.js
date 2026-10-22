@@ -565,6 +565,7 @@ async function renderResults({ model, modelAna, userFile, userPose, userAna, res
       state.cleanups.push(() => fb.destroy());
       players[who] = {
         play: (r = 1) => fb.play(r), pause: () => fb.pause(), seekFrame: (i) => fb.seekFrame(i),
+        restart: () => fb.seek(0), isPlaying: () => fb.playing,
         visible: () => !!wrapEl.offsetParent,
       };
       return;
@@ -627,6 +628,8 @@ async function renderResults({ model, modelAna, userFile, userPose, userAna, res
       play: (r = 1) => { videoEl.playbackRate = r; videoEl.play(); },
       pause: () => videoEl.pause(),
       seekFrame: (i) => { videoEl.pause(); videoEl.currentTime = i / pose.fps; },
+      restart: () => { videoEl.pause(); videoEl.currentTime = a; },
+      isPlaying: () => !videoEl.paused,
       visible: () => !!wrapEl.offsetParent,
     };
   };
@@ -783,16 +786,34 @@ async function renderResults({ model, modelAna, userFile, userPose, userAna, res
     (b.dataset.show === 'model' ? players.user : players.model).pause();
   };
 
-  $('sync-btn').onclick = () => {
-    viewer.pause();
-    const firstTurn = (ana) => (ana.fallback ? 0 : ana.turns[0].start);
-    players.model.seekFrame(firstTurn(modelAna));
-    players.user.seekFrame(firstTurn(userAna));
-    const modelRate = Math.min(4, Math.max(0.25, modelAna.avgTurnDur / userAna.avgTurnDur || 1));
-    // スマホでは表示中の1本だけを再生する
-    if (players.model.visible()) players.model.play(modelRate);
-    if (players.user.visible()) players.user.play(1);
+  // 2本を同時に再生する。「ターンのリズムを合わせる」がオンなら、最初のターンから、お手本の速さをあなたのリズムに合わせて再生する
+  const updateSyncBtn = () => {
+    $('sync-btn').textContent = players.model.isPlaying() || players.user.isPlaying() ? '❚❚ 2本とも一時停止' : '▶ 2本を同時に再生';
   };
+  $('sync-btn').onclick = () => {
+    if (players.model.isPlaying() || players.user.isPlaying()) {
+      players.model.pause();
+      players.user.pause();
+      updateSyncBtn();
+      return;
+    }
+    viewer.pause();
+    if ($('sync-toggle').checked) {
+      const firstTurn = (ana) => (ana.fallback ? 0 : ana.turns[0].start);
+      players.model.seekFrame(firstTurn(modelAna));
+      players.user.seekFrame(firstTurn(userAna));
+      players.model.play(Math.min(4, Math.max(0.25, modelAna.avgTurnDur / userAna.avgTurnDur || 1)));
+      players.user.play(1);
+    } else {
+      players.model.restart();
+      players.user.restart();
+      players.model.play(1);
+      players.user.play(1);
+    }
+    updateSyncBtn();
+  };
+  const syncTimer = setInterval(updateSyncBtn, 300);
+  state.cleanups.push(() => clearInterval(syncTimer));
 
   // 診断情報
   const diagBlock = (label, pose, ana) => {
