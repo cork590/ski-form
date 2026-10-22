@@ -660,7 +660,7 @@ async function renderResults({ model, modelAna, userFile, userPose, userAna, res
         : '谷回りと山回りの配分は、お手本とほぼ同じです。');
   }
   let lastTimingKey = '';
-  let shape = 'fig8';
+  let shape = 's';
   let lastSt = null;
   $('shape-buttons').onclick = (ev) => {
     const b = ev.target.closest('button');

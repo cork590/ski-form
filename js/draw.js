@@ -386,39 +386,43 @@ export function drawTimingChart(canvas, rows, phase) {
 }
 
 /**
- * 谷回り・山回り・切り返しを、8の字（右の輪＝右ターン、左の輪＝左ターン、交点＝切り返し）
- * または円（1ターン＝1周、一番上＝切り返し）で描く。輪1周の時間を均等に割り当てるので、
- * フォールライン（●）の位置のずれが、そのままタイミングの差になる。
- * rows: [{ label, color, bySign: {1: {fallFrac}, -1: {fallFrac}}, now: { sign, phase } | null }]
+ * 谷回り・山回り・切り返しを、S字（実際のシュプールのように上から下へ3ターン）または
+ * 8の字（右の輪＝右ターン、左の輪＝左ターン、交点＝切り返し）で描く。
+ * 1ターンに同じ時間を割り当てるので、フォールライン（○）の位置のずれが、そのままタイミングの差になる。
+ * rows: [{ label, color, bySign: {1: {fallFrac}, -1: {fallFrac}}, now: { sign, phase } | null }]（先頭＝お手本）
  */
 export function drawTurnShape(canvas, rows, shape) {
   const { ctx, w, h } = fitCanvas(canvas);
   ctx.clearRect(0, 0, w, h);
   const cx = w / 2, cy = h / 2;
-  // 外側から順に（お手本→あなた）少しずつ小さく描く
-  const scales = rows.map((_, k) => 1 - k * 0.24);
+  const now = rows.find((r) => r.now?.sign)?.now ?? { sign: 1, phase: 0 };
+
+  // S字：上から下へ、今のターンを真ん中にして3ターン。真ん中の線を横切る点が切り返し、
+  // 一番外側にふくらんだ点がおおよそフォールライン。右ターンは左へ、左ターンは右へふくらむ（ターンの外側）
+  const top = 22, bottom = h - 22;
+  const turnH = (bottom - top) / 3;
+  const A = Math.min(w * 0.3, turnH * 0.9);
+  const seq = [-now.sign, now.sign, -now.sign];
+  const sPoint = (slot, phase) => [cx - seq[slot] * A * Math.sin(Math.PI * phase), top + (slot + phase) * turnH];
 
   // 8の字（ジェルノのレムニスケート）：θ=0,π が交点。右の輪 θ∈[0,π]、左の輪 θ∈[π,2π]
   const R8 = Math.min(w * 0.46, h * 0.95);
   const fig8 = (theta, s) => [cx + Math.sin(theta) * R8 * s, cy - Math.sin(theta) * Math.cos(theta) * R8 * s];
-  // 円：一番上が切り返し、時計回り
-  const RC = Math.min(w, h) * 0.42;
-  const circle = (theta, s) => [cx + Math.sin(theta) * RC * s, cy - Math.cos(theta) * RC * s];
 
-  const pointAt = (sign, phase, s) => (shape === 'circle'
-    ? circle(phase * Math.PI * 2, s)
-    : fig8((sign > 0 ? 0 : Math.PI) + phase * Math.PI, s));
+  const pathAt = (sign, slot, phase, k) => (shape === 's'
+    ? sPoint(slot, phase)
+    : fig8((sign > 0 ? 0 : Math.PI) + phase * Math.PI, 1 - k * 0.24));
 
-  const arc = (sign, from, to, s, color, alpha, width) => {
+  const arc = (sign, slot, from, to, k, color, alpha, width) => {
     ctx.strokeStyle = color;
     ctx.globalAlpha = alpha;
     ctx.lineWidth = width;
     ctx.lineCap = 'round';
     ctx.beginPath();
-    const n = 48;
-    for (let k = 0; k <= n; k++) {
-      const [x, y] = pointAt(sign, from + ((to - from) * k) / n, s);
-      if (k) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+    const n = 40;
+    for (let j = 0; j <= n; j++) {
+      const [x, y] = pathAt(sign, slot, from + ((to - from) * j) / n, k);
+      if (j) ctx.lineTo(x, y); else ctx.moveTo(x, y);
     }
     ctx.stroke();
     ctx.globalAlpha = 1;
@@ -431,30 +435,57 @@ export function drawTurnShape(canvas, rows, shape) {
     if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 2; ctx.stroke(); }
   };
 
+  // S字はお手本＝太く薄い線、あなた＝細い線で同じ道筋に重ねる。8の字は外側＝お手本、内側＝あなた
+  const widths = shape === 's' ? [14, 5] : [6, 6];
+  const turnsToDraw = shape === 's' ? [0, 1, 2].map((slot) => [seq[slot], slot]) : [[1, 0], [-1, 0]];
   rows.forEach((r, k) => {
-    const s = scales[k];
-    // 円は今のターンの向き（なければ右ターン）だけを描く
-    const signs = shape === 'circle' ? [r.now?.sign || 1] : [1, -1];
-    for (const sign of signs) {
+    for (const [sign, slot] of turnsToDraw) {
       const f = r.bySign[sign].fallFrac;
-      arc(sign, 0, f, s, r.color, 0.95, 6);   // 谷回り
-      arc(sign, f, 1, s, r.color, 0.3, 6);    // 山回り
-      dot(pointAt(sign, f, s), 5, cssVar('--surface'), r.color); // フォールライン
+      const dim = shape === 's' && slot !== 1 ? 0.5 : 1; // 今のターン以外は少し薄く
+      arc(sign, slot, 0, f, k, r.color, (k === 0 && shape === 's' ? 0.45 : 0.95) * dim, widths[k]); // 谷回り
+      arc(sign, slot, f, 1, k, r.color, (k === 0 && shape === 's' ? 0.18 : 0.3) * dim, widths[k]);  // 山回り
+      dot(pathAt(sign, slot, f, k), k === 0 && shape === 's' ? 7 : 5, cssVar('--surface'), r.color); // フォールライン
     }
   });
 
-  // 切り返し（8の字の交点／円の一番上）
-  const top = shape === 'circle' ? circle(0, 1) : [cx, cy];
-  ctx.fillStyle = cssVar('--text');
   ctx.font = '600 11px system-ui, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'bottom';
-  ctx.fillText('切り返し', top[0], top[1] - 8);
   ctx.textBaseline = 'middle';
-  if (shape === 'circle') {
+  if (shape === 's') {
+    // 切り返し（真ん中の線を横切る点）と、ターンの向き・谷回り/山回りの目印
+    ctx.strokeStyle = cssVar('--border');
+    ctx.setLineDash([3, 4]);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(cx, top - 10);
+    ctx.lineTo(cx, bottom + 10);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    for (let slot = 0; slot <= 3; slot++) {
+      ctx.fillStyle = cssVar('--text-muted');
+      ctx.textAlign = 'left';
+      ctx.fillText('切り返し', cx + 6, top + slot * turnH);
+    }
+    for (let slot = 0; slot < 3; slot++) {
+      const side = -seq[slot];
+      ctx.fillStyle = cssVar(slot === 1 ? '--text' : '--text-muted');
+      ctx.textAlign = side > 0 ? 'left' : 'right';
+      const x = cx + side * (A + 14);
+      ctx.fillText(seq[slot] > 0 ? '右ターン' : '左ターン', x, top + (slot + 0.5) * turnH);
+      if (slot === 1) {
+        ctx.fillStyle = cssVar('--text-muted');
+        ctx.fillText('↑谷回り', x, top + (slot + 0.25) * turnH);
+        ctx.fillText('↓山回り', x, top + (slot + 0.75) * turnH);
+      }
+    }
+    ctx.textAlign = 'right';
     ctx.fillStyle = cssVar('--text-muted');
-    ctx.fillText('↻ 時計回り', cx, cy);
+    ctx.fillText('斜面の下へ ↓', w - 4, h - 8);
   } else {
+    ctx.fillStyle = cssVar('--text');
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText('切り返し', cx, cy - 8);
+    ctx.textBaseline = 'middle';
     ctx.fillStyle = cssVar('--text-muted');
     ctx.textAlign = 'left';
     ctx.fillText('左ターン', 4, 10);
@@ -462,9 +493,9 @@ export function drawTurnShape(canvas, rows, shape) {
     ctx.fillText('右ターン', w - 4, 10);
   }
 
-  // 今の位置
+  // 今の位置（S字は真ん中のターン上を動く）
   rows.forEach((r, k) => {
     if (!r.now || !r.now.sign) return;
-    dot(pointAt(r.now.sign, r.now.phase, scales[k]), 7, r.color, '#ffffff');
+    dot(pathAt(r.now.sign, 1, r.now.phase, k), k === 0 && shape === 's' ? 9 : 7, r.color, '#ffffff');
   });
 }
