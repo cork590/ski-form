@@ -459,6 +459,7 @@ $('analyze-btn').addEventListener('click', async () => {
 
 // ---------- 結果表示 ----------
 const cssVarValue = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const turnCount = (ana) => (ana.fallback ? '–' : (Math.round((ana.effectiveTurns ?? ana.turns.length) * 10) / 10).toString());
 const isNarrow = () => matchMedia('(max-width: 700px)').matches;
 const fmt = (v, digits) => (v > 0 ? '+' : '') + v.toFixed(digits);
 const slopeText = (s) => (s ? `${s.deg.toFixed(0)}°` : '不明');
@@ -493,7 +494,8 @@ async function renderResults({ model, modelAna, userFile, userPose, userAna, res
     return s.length ? s[Math.floor(s.length / 2)] : 0;
   };
   for (const [label, pose, ana] of [['お手本', model.pose, modelAna], ['あなた', userPose, userAna]]) {
-    if (ana.fallback || ana.turns.length < 2) reasons.push(`${label}の動画から比較に使えたターンが${ana.fallback ? '0' : ana.turns.length}つしかありません（2つ以上が必要です）`);
+    const nTurns = ana.fallback ? 0 : (ana.effectiveTurns ?? ana.turns.length);
+    if (nTurns < 1.8) reasons.push(`${label}の動画から比較に使えたターンが約${nTurns.toFixed(1)}つしかありません（2つ以上が必要です）`);
     if (okCount(pose) < 45) reasons.push(`${label}の動画で骨格を検出できたコマが${okCount(pose)}コマと少なすぎます`);
     if (medSize(pose) < SMALL_PERSON) reasons.push(`${label}の動画で人物が小さく映っています（画面の高さの約${Math.round(medSize(pose) * 100)}%）`);
   }
@@ -505,7 +507,7 @@ async function renderResults({ model, modelAna, userFile, userPose, userAna, res
 
   $('summary').innerHTML = `
     <div class="stat"><div class="label">お手本との近さ${unreliable ? '（参考値）' : ''}</div><div class="value">${result.similarity}<small> / 100</small></div></div>
-    <div class="stat"><div class="label">検出したターン数</div><div class="value">${userAna.fallback ? '–' : userAna.turns.length}<small> （お手本 ${modelAna.fallback ? '–' : modelAna.turns.length}）</small></div></div>
+    <div class="stat"><div class="label">比較に使ったターン数</div><div class="value">${turnCount(userAna)}<small> （お手本 ${turnCount(modelAna)}）</small></div><div class="note">始めと終わりの途中のターンも、6割以上あれば数えます</div></div>
     <div class="stat"><div class="label">1ターンの平均時間</div><div class="value">${userAna.avgTurnDur.toFixed(2)}<small>秒 （お手本 ${modelAna.avgTurnDur.toFixed(2)}秒）</small></div></div>
     <div class="stat"><div class="label">推定速度</div><div class="value">${kmh(userAna)}<small> km/h （お手本 ${kmh(modelAna)} km/h）</small></div><div class="note">体の傾きとターンのリズムから計算した目安です</div></div>
     <div class="stat"><div class="label">推定ターン半径</div><div class="value">${radius(userAna)}<small> m （お手本 ${radius(modelAna)} m）</small></div><div class="note">1ターンの弧の半径（ターンの大きさ）の目安です</div></div>

@@ -218,6 +218,27 @@ export function turnRelative(m, s) {
   };
 }
 
+// 途中のターン：コマごとの局面（from〜to）に合わせて N_POINTS の目盛りに置く。範囲外の目盛りは null
+function partialSeries(raw, t) {
+  const n = t.end - t.start;
+  const phaseOf = (i) => t.from + ((t.to - t.from) * (i - t.start)) / (n || 1);
+  const vals = [];
+  for (let i = t.start; i <= t.end; i++) vals.push({ p: Math.min(1, phaseOf(i)), v: turnRelative(raw[i], t.sign) });
+  const out = {};
+  for (const def of METRICS) {
+    out[def.key] = Array.from({ length: N_POINTS }, (_, j) => {
+      const pj = j / (N_POINTS - 1);
+      if (pj < vals[0].p || pj > vals.at(-1).p) return null;
+      let k = 0;
+      while (k < vals.length - 2 && vals[k + 1].p < pj) k++;
+      const a = vals[k], b = vals[k + 1] ?? a;
+      const w = b.p > a.p ? (pj - a.p) / (b.p - a.p) : 0;
+      return a.v[def.key] + (b.v[def.key] - a.v[def.key]) * w;
+    });
+  }
+  return out;
+}
+
 function turnSeries(raw, turn) {
   const out = {};
   for (const def of METRICS) out[def.key] = [];
@@ -390,14 +411,28 @@ export function analyzeSession(pose) {
     perTurn: motions,
   } : null;
 
-  const cycles = turns.map((t) => turnSeries(raw, t));
+  // 最初の切り返しより前・最後の切り返しより後ろの「途中のターン」も、ターンの6割以上あれば比較に使う。
+  // 平均のターン時間から、それぞれのコマがターンのどの局面にあたるかを推定して、同じ局面どうしで平均する
+  const spanFirst = Math.max(0, valid.indexOf(true)), spanLast = Math.max(0, valid.lastIndexOf(true));
+  const avgLen = mean(turns.map((t) => t.end - t.start)) || fps;
+  const partialTurns = [];
+  if (!fallback) {
+    const pre = turns[0].start - spanFirst, post = spanLast - turns.at(-1).end;
+    if (pre / avgLen >= 0.6) partialTurns.push({ start: spanFirst, end: turns[0].start, sign: -turns[0].sign, from: 1 - pre / avgLen, to: 1 });
+    if (post / avgLen >= 0.6) partialTurns.push({ start: turns.at(-1).end, end: spanLast, sign: -turns.at(-1).sign, from: 0, to: post / avgLen });
+  }
+  const cycles = [...turns.map((t) => turnSeries(raw, t)), ...partialTurns.map((t) => partialSeries(raw, t))];
   const profile = {};
   for (const def of METRICS) {
-    profile[def.key] = Array.from({ length: N_POINTS }, (_, i) => mean(cycles.map((c) => c[def.key][i])));
+    // 途中のターンは、その局面の分だけ（それ以外は null）
+    profile[def.key] = Array.from({ length: N_POINTS }, (_, i) => mean(cycles.map((c) => c[def.key][i]).filter((v) => v != null)));
   }
   return {
     fps, raw, wl: smoothed, lateral, turns, profile, fallback, warnings, motion, validRatio,
     cameraRoll, slope: pose.slope ?? null, reliable,
+    partialTurns,
+    // 比較に使えたターンの数（途中のターンは、その長さの割合で数える）
+    effectiveTurns: fallback ? 0 : turns.length + partialTurns.reduce((sum, t) => sum + (t.to - t.from), 0),
     // 骨格がある（補間できる）最初と最後のコマ
     span: [Math.max(0, valid.indexOf(true)), Math.max(0, valid.lastIndexOf(true))],
     avgTurnDur: mean(turns.map((t) => (t.end - t.start) / fps)),
