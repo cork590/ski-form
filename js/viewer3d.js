@@ -50,7 +50,8 @@ function prepare(ana) {
   const poses = ana.wl.map((w) => {
     const pts = w.map((p) => rotY([p[0] * scale, -p[1] * scale, -p[2] * scale], align));
     const ank = mid(pts[LM.lAnk], pts[LM.rAnk]);
-    const floor = Math.min(pts[LM.lAnk][1], pts[LM.rAnk][1]);
+    // 両足首の高さの中間を地面の高さにする（雪面は両足の下を通る）
+    const floor = (pts[LM.lAnk][1] + pts[LM.rAnk][1]) / 2;
     return pts.map((p) => [p[0] - ank[0], p[1] - floor, p[2] - ank[2]]);
   });
   // 人の姿勢としてありえないコマ（頭が腰より下、足首が腰より上など）は、近くのまともなコマで置き換える。
@@ -181,12 +182,21 @@ function project(p, view, panel) {
   return { x: panel.ox + x * panel.k, y: panel.oy - y * panel.k, d: p[1] * sp + z * cp };
 }
 
-function drawGround(ctx, view, panel) {
+// 雪面の傾き：両足首を結ぶ線の左右方向の傾き（前後の軸まわり）。斜面では山側の足が高くなるので、
+// 地面を水平に描くと片足が浮いて「足踏み」しているように見える。地面を両足の下を通る面として描く
+function groundTilt(pose) {
+  const dx = pose[LM.rAnk][0] - pose[LM.lAnk][0], dy = pose[LM.rAnk][1] - pose[LM.lAnk][1];
+  if (Math.abs(dx) < 0.05) return 0;
+  return Math.max(-0.6, Math.min(0.6, Math.atan(dy / dx)));
+}
+const tiltPoint = ([x, y, z], tilt) => [x * Math.cos(tilt), y + x * Math.sin(tilt), z];
+
+function drawGround(ctx, view, panel, tilt = 0) {
   ctx.strokeStyle = cssVar('--viewer-grid');
   ctx.lineWidth = 1;
   for (let v = -1.5; v <= 1.501; v += 0.5) {
     for (const [a, b] of [[[v, 0, -1.5], [v, 0, 1.5]], [[-1.5, 0, v], [1.5, 0, v]]]) {
-      const pa = project(a, view, panel), pb = project(b, view, panel);
+      const pa = project(tiltPoint(a, tilt), view, panel), pb = project(tiltPoint(b, tilt), view, panel);
       ctx.beginPath();
       ctx.moveTo(pa.x, pa.y);
       ctx.lineTo(pb.x, pb.y);
@@ -206,8 +216,8 @@ function drawFigure(ctx, pose, view, panel, color, alpha, showSkis = false) {
     const l = Math.hypot(d[0], d[2]);
     d = l > 1e-3 ? [d[0] / l, 0, d[2] / l] : [0, 0, 1];
     const a = pose[ank];
-    const tip = project([a[0] + d[0] * 1.05, Math.max(0, a[1] - 0.06), a[2] + d[2] * 1.05], view, panel);
-    const tail = project([a[0] - d[0] * 0.75, Math.max(0, a[1] - 0.06), a[2] - d[2] * 0.75], view, panel);
+    const tip = project([a[0] + d[0] * 1.05, a[1] - 0.06, a[2] + d[2] * 1.05], view, panel);
+    const tail = project([a[0] - d[0] * 0.75, a[1] - 0.06, a[2] - d[2] * 0.75], view, panel);
     items.push({ kind: 'line', a: tail, b: tip, w: 0.05, d: (tip.d + tail.d) / 2 - 0.01, c: shade(color, 0.55) });
   }
 
@@ -311,7 +321,8 @@ export function createViewer({ canvas, model, user, info, seek, playBtn, speedSe
     ctx.textBaseline = 'top';
     if (mode === 'side') {
       const panels = [{ ox: w * 0.25, oy: h * 0.8, k }, { ox: w * 0.75, oy: h * 0.8, k }];
-      panels.forEach((p) => drawGround(ctx, view, p));
+      drawGround(ctx, view, panels[0], groundTilt(mPose));
+      drawGround(ctx, view, panels[1], groundTilt(uPose));
       drawFigure(ctx, mPose, view, panels[0], cModel, 1, showSkis);
       drawFigure(ctx, uPose, view, panels[1], cUser, 1, showSkis);
       ctx.fillStyle = cModel;
@@ -325,7 +336,7 @@ export function createViewer({ canvas, model, user, info, seek, playBtn, speedSe
       ctx.stroke();
     } else {
       const panel = { ox: w / 2, oy: h * 0.8, k };
-      drawGround(ctx, view, panel);
+      drawGround(ctx, view, panel, groundTilt(uPose));
       drawFigure(ctx, mPose, view, panel, cModel, 0.5, showSkis);
       drawFigure(ctx, uPose, view, panel, cUser, 0.85, showSkis);
       ctx.fillStyle = cModel;

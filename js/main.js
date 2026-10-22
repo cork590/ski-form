@@ -769,7 +769,8 @@ async function renderResults({ model, modelAna, userFile, userPose, userAna, res
   $('ski-toggle').onchange = () => viewer.setShowSkis($('ski-toggle').checked);
   viewer.setShowSkis($('ski-toggle').checked);
   $('source-buttons').querySelector('[data-source="average"]').disabled = !viewer.canAverage;
-  $('source-buttons').querySelector('[data-source="actual"]').click();
+  // 初期表示は「平均（3ターン）」（滑りのクセが見やすい）。ターンを検出できないときは「実際の滑り」
+  $('source-buttons').querySelector(`[data-source="${viewer.canAverage ? 'average' : 'actual'}"]`).click();
   $('view-buttons').querySelector('[data-view="front"]').click();
   $('mode-buttons').querySelector('[data-mode="side"]').click();
 
