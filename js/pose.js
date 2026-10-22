@@ -12,6 +12,8 @@ const POSE_MODEL = new URLSearchParams(location.search).get('model') !== 'full'
   ? 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/latest/pose_landmarker_heavy.task'
   : 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task';
 const DETECT_MODEL = 'https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite2/float16/latest/efficientdet_lite2.tflite';
+// 動作確認用：?localmodels を付けると、AIモデルをこのアプリの models/ フォルダから読み込む（公開版には models/ はない）
+const LOCAL_MODELS = new URLSearchParams(location.search).has('localmodels');
 
 const CROP = 512; // 切り出した画像の大きさ（px）
 const MARGIN = 1.6; // 人物の大きさに対する切り出し範囲の倍率
@@ -52,7 +54,7 @@ function getModels() {
         return await factory.createFromOptions(fileset, { ...opts, baseOptions: { ...opts.baseOptions, delegate: 'CPU' } });
       };
       const poseOpts = (runningMode) => ({
-        baseOptions: { modelAssetPath: POSE_MODEL },
+        baseOptions: { modelAssetPath: LOCAL_MODELS ? 'models/pose_landmarker_heavy.task' : POSE_MODEL },
         runningMode,
         numPoses: 1,
         minPoseDetectionConfidence: 0.4,
@@ -65,7 +67,7 @@ function getModels() {
       const pose = await create(PoseLandmarker, poseOpts('VIDEO'), 'pose');
       const poseImage = await create(PoseLandmarker, poseOpts('IMAGE'), 'pose');
       const detector = await create(ObjectDetector, {
-        baseOptions: { modelAssetPath: DETECT_MODEL },
+        baseOptions: { modelAssetPath: LOCAL_MODELS ? 'models/efficientdet_lite2.tflite' : DETECT_MODEL },
         runningMode: 'IMAGE',
         scoreThreshold: 0.2,
         maxResults: 8,
@@ -406,38 +408,41 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
     cap.width = Math.round(W * capScale);
     cap.height = Math.round(H * capScale);
     const capCtx = cap.getContext('2d');
-    // fromIdx〜toIdx を rate 倍速で再生し、まだ取り込んでいないコマを blobs に追加する
+    // 取り込んだ画像を解析するときに写す canvas
     const work = document.createElement('canvas');
     const workCtx = work.getContext('2d');
+    // fromIdx〜toIdx を rate 倍速で再生し、まだ取り込んでいないコマを blobs に追加する。
+    // 一時停止はせず、表示されたコマを canvas に写して JPEG への変換は裏で進める
+    // （toBlob は呼んだ時点の画像を写し取るので、canvas はすぐ次のコマに使える）
     const captureRange = (fromIdx, toIdx, rate, blobs, label) => new Promise((resolve) => {
       let lastIdx = fromIdx - 1;
       let finished = false;
-      const finish = () => {
+      const pending = [];
+      const finish = async () => {
         if (finished) return;
         finished = true;
         clearTimeout(watchdog.id);
         video.pause();
+        // 変換が返ってこないものがあっても止まらないよう、最大5秒で打ち切る
+        await Promise.race([Promise.all(pending), new Promise((r) => setTimeout(r, 5000))]);
         resolve(blobs);
       };
       const watchdog = { id: 0 };
       const arm = () => { clearTimeout(watchdog.id); watchdog.id = setTimeout(finish, 5000); };
-      const onFrame = async (_now, meta) => {
+      const onFrame = (_now, meta) => {
         if (finished) return;
         arm();
         const i = Math.round(meta.mediaTime * fps);
-        if (i > lastIdx && i <= toIdx && blobs.has(i)) lastIdx = i; // 取り込み済みは止めずに進む
         if (i > lastIdx && i <= toIdx) {
-          video.pause();
-          capCtx.drawImage(video, 0, 0, cap.width, cap.height);
-          const blob = await new Promise((r) => cap.toBlob(r, 'image/jpeg', 0.92));
-          if (blob) blobs.set(i, blob);
           lastIdx = i;
-          onProgress(blobs.size / (last - first + 1), `${label}… ${blobs.size} / ${last - first + 1}`);
-          if (i >= toIdx) { finish(); return; }
-          video.requestVideoFrameCallback(onFrame);
-          video.playbackRate = rate;
-          video.play().catch(finish);
-          return;
+          if (!blobs.has(i)) {
+            capCtx.drawImage(video, 0, 0, cap.width, cap.height);
+            pending.push(new Promise((r) => cap.toBlob((blob) => {
+              if (blob) blobs.set(i, blob);
+              onProgress(blobs.size / (last - first + 1), `${label}… ${blobs.size} / ${last - first + 1}`);
+              r();
+            }, 'image/jpeg', 0.9)));
+          }
         }
         if (i >= toIdx || video.ended) { finish(); return; }
         video.requestVideoFrameCallback(onFrame);

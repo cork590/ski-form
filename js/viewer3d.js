@@ -384,6 +384,7 @@ export function createViewer({ canvas, model, user, info, seek, playBtn, speedSe
       view.pitch = VIEWS[name].pitch * RAD;
     },
     setMode(m) { mode = m; },
+    pause() { if (playing) setPlaying(false); },
     setShowSkis(v) { showSkis = v; },
     canAverage: !!averageTimeline,
     setSource(s) {

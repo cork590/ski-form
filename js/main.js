@@ -504,6 +504,7 @@ async function renderResults({ model, modelAna, userFile, userPose, userAna, res
 
   // 元の動画と骨格。お手本・あなたの再生を同じ操作で扱えるようにする
   const players = {};
+  let viewerRef = null; // 下で作る人形モデル（元の動画を再生するときに止めるため）
   const setupPlayer = async (who, videoEl, wrapEl, blob, pose, fromStorage) => {
     wrapEl.style.aspectRatio = `${pose.width} / ${pose.height}`;
     const canvas = wrapEl.querySelector('canvas');
@@ -513,9 +514,16 @@ async function renderResults({ model, modelAna, userFile, userPose, userAna, res
     // 解析したコマの画像がある場合は、動画プレーヤーを使わずパラパラ再生する
     // （切り取った範囲だけが確実に表示され、画像と骨格が必ず一致する）
     if (pose.frames.some((f) => f.img)) {
-      videoEl.hidden = true;
+      // 動画はキャンバスの下に置き、再生中だけキャンバスに描き写して使う（なめらかに見せるため）
+      videoEl.hidden = false;
       videoEl.removeAttribute('src');
       canvas.style.pointerEvents = 'auto';
+      (async () => {
+        const src = fromStorage ? new Blob([await blob.arrayBuffer()], { type: blob.type || 'video/mp4' }) : blob;
+        const url = URL.createObjectURL(src);
+        state.urls.push(url);
+        videoEl.src = url;
+      })();
       let fb = null;
       const updateUI = () => {
         if (!fb) return;
@@ -523,12 +531,20 @@ async function renderResults({ model, modelAna, userFile, userPose, userAna, res
         label.textContent = `${fb.time.toFixed(1)} / ${fb.length.toFixed(1)}秒`;
         playBtn.textContent = fb.playing ? '❚❚' : '▶';
       };
+      videoEl.onclick = null;
+      videoEl.onplay = videoEl.onpause = videoEl.onseeked = videoEl.ontimeupdate = videoEl.onloadedmetadata = null;
       fb = createFlipbook(canvas, pose, {
         isSkeletonVisible: () => $('skeleton-toggle').checked,
         isZoom: () => $('zoom-toggle').checked,
         onChange: updateUI,
+        video: videoEl,
       });
-      const toggle = () => (fb.playing ? fb.pause() : fb.play(1));
+      // 元の動画を自分で再生するときは、人形の再生を止める（人形に合わせて動画が巻き戻されないように）
+      const toggle = () => {
+        if (fb.playing) { fb.pause(); return; }
+        viewerRef?.pause();
+        fb.play(1);
+      };
       playBtn.onclick = toggle;
       canvas.onclick = toggle;
       bar.oninput = () => fb.seek((Number(bar.value) / 1000) * fb.length);
@@ -560,6 +576,7 @@ async function renderResults({ model, modelAna, userFile, userPose, userAna, res
     };
     const toggle = () => {
       if (videoEl.paused) {
+        viewerRef?.pause();
         if (videoEl.currentTime >= b - 0.05) videoEl.currentTime = a;
         videoEl.play();
       } else {
@@ -724,6 +741,7 @@ async function renderResults({ model, modelAna, userFile, userPose, userAna, res
     },
   });
   state.cleanups.push(() => viewer.destroy());
+  viewerRef = viewer;
   const segment = (groupId, attr, apply) => {
     $(groupId).onclick = (ev) => {
       const b = ev.target.closest('button');
@@ -752,6 +770,7 @@ async function renderResults({ model, modelAna, userFile, userPose, userAna, res
   };
 
   $('sync-btn').onclick = () => {
+    viewer.pause();
     const firstTurn = (ana) => (ana.fallback ? 0 : ana.turns[0].start);
     players.model.seekFrame(firstTurn(modelAna));
     players.user.seekFrame(firstTurn(userAna));

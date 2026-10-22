@@ -119,7 +119,7 @@ export function attachSkeleton(video, canvas, pose, isVisible) {
  * 切り取った範囲のコマだけを持っているので、範囲外が映ることはなく、画像と骨格が必ず一致する。
  * iPhone の動画プレーヤーはシーク後の画像が更新されないことがあるため、こちらを使う。
  */
-export function createFlipbook(canvas, pose, { isSkeletonVisible, isZoom = () => false, onChange = () => {} }) {
+export function createFlipbook(canvas, pose, { isSkeletonVisible, isZoom = () => false, onChange = () => {}, video = null }) {
   const [a, b] = pose.range ?? [0, pose.duration];
   const first = Math.max(0, Math.round(a * pose.fps));
   const last = Math.min(pose.frames.length - 1, Math.round(b * pose.fps));
@@ -151,18 +151,61 @@ export function createFlipbook(canvas, pose, { isSkeletonVisible, isZoom = () =>
     }
     return null;
   };
+  // 再生中は元の動画をなめらかに描き、骨格とズーム範囲はコマの間を補間する（usingVideo）。
+  // 止まっている間は解析したコマの画像を表示する（iPhone でシーク後の画像が更新されない問題を避けるため）
+  let usingVideo = false;
+  const lerpArr = (a, b, t) => a.map((v, k) => (Array.isArray(v) ? lerpArr(v, b[k], t) : v + (b[k] - v) * t));
+  const at = (key, p) => {
+    const i0 = Math.floor(p), i1 = Math.min(last, i0 + 1), t = p - i0;
+    const a = pose.frames[i0]?.[key], b = pose.frames[i1]?.[key];
+    if (a && b) return lerpArr(a, b, t);
+    return a ?? b ?? null;
+  };
   let pos = first;
   let rate = 1;
   let lastTs = 0;
   let dirty = true;
   let raf = 0;
   const state = { playing: false };
+  const stopVideo = () => {
+    if (usingVideo && video && !video.paused) video.pause();
+    usingVideo = false;
+  };
   let lastKey = '';
 
   const draw = () => {
     const i = Math.round(pos);
     const visible = isSkeletonVisible();
     const zoom = isZoom();
+    if (usingVideo && video && video.readyState >= 2) {
+      const { ctx, w: cw, h: ch } = fitCanvas(canvas);
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, cw, ch);
+      const VW = video.videoWidth, VH = video.videoHeight;
+      const zr0 = zoom ? at('zoomRoi', pos) : null;
+      const f = pose.frames[i];
+      const lm = at('lm', pos);
+      if (zr0) {
+        const zr = containRect(cw, ch, 1, 1);
+        ctx.drawImage(video, zr0[0] * VW, zr0[1] * VH, zr0[2] * VW, zr0[3] * VH, zr.x, zr.y, zr.w, zr.h);
+        if (visible && lm) {
+          ctx.save();
+          ctx.translate(zr.x, zr.y);
+          drawOverlay(ctx, zr.w, zr.h, { ...f, roi: null, lm: lm.map((p) => [(p[0] - zr0[0]) / zr0[2], (p[1] - zr0[1]) / zr0[3], p[2]]) });
+          ctx.restore();
+        }
+      } else {
+        const r = containRect(cw, ch, VW, VH);
+        ctx.drawImage(video, r.x, r.y, r.w, r.h);
+        if (visible) {
+          ctx.save();
+          ctx.translate(r.x, r.y);
+          drawOverlay(ctx, r.w, r.h, { ...f, lm, roi: at('roi', pos) });
+          ctx.restore();
+        }
+      }
+      return;
+    }
     const key = [i, visible, zoom, canvas.clientWidth, canvas.clientHeight].join('|');
     if (!dirty && key === lastKey) return;
     dirty = false;
@@ -198,7 +241,16 @@ export function createFlipbook(canvas, pose, { isSkeletonVisible, isZoom = () =>
   };
   const loop = (ts) => {
     raf = requestAnimationFrame(loop);
-    if (state.playing && lastTs) {
+    if (state.playing && usingVideo) {
+      pos = Math.min(last, video.currentTime * pose.fps);
+      dirty = true;
+      if (pos >= last || video.ended) {
+        pos = last;
+        stopVideo();
+        state.playing = false;
+      }
+      onChange();
+    } else if (state.playing && lastTs) {
       pos += ((ts - lastTs) / 1000) * pose.fps * rate;
       if (pos >= last) {
         pos = last;
@@ -222,13 +274,20 @@ export function createFlipbook(canvas, pose, { isSkeletonVisible, isZoom = () =>
       rate = r;
       if (pos >= last) pos = first;
       state.playing = true;
+      if (video?.src) {
+        usingVideo = true;
+        video.currentTime = pos / pose.fps;
+        video.playbackRate = r;
+        // 動画を再生できないときは、コマの画像のパラパラ再生にする
+        video.play().catch(() => { usingVideo = false; });
+      }
       onChange();
     },
-    pause() { state.playing = false; onChange(); },
+    pause() { stopVideo(); state.playing = false; pos = Math.round(pos); dirty = true; onChange(); },
     /** 範囲の始めからの秒数で移動 */
-    seek(t) { pos = Math.min(last, Math.max(first, first + t * pose.fps)); dirty = true; onChange(); },
+    seek(t) { stopVideo(); state.playing = false; pos = Math.min(last, Math.max(first, first + t * pose.fps)); dirty = true; onChange(); },
     /** 元の動画のコマ番号で移動 */
-    seekFrame(i) { pos = Math.min(last, Math.max(first, i)); dirty = true; onChange(); },
+    seekFrame(i) { stopVideo(); state.playing = false; pos = Math.min(last, Math.max(first, i)); dirty = true; onChange(); },
     redraw() { dirty = true; },
     destroy() { cancelAnimationFrame(raf); },
   };
