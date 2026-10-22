@@ -53,6 +53,21 @@ function prepare(ana) {
     const floor = Math.min(pts[LM.lAnk][1], pts[LM.rAnk][1]);
     return pts.map((p) => [p[0] - ank[0], p[1] - floor, p[2] - ank[2]]);
   });
+  // 人の姿勢としてありえないコマ（頭が腰より下、足首が腰より上など）は、近くのまともなコマで置き換える。
+  // 骨格の誤検出で人形が逆さまや地面の下に描かれるのを防ぐ
+  const plausible = poses.map((p) => {
+    const head = mid(p[LM.lEar], p[LM.rEar])[1], hip = mid(p[LM.lHip], p[LM.rHip])[1];
+    const ank = Math.max(p[LM.lAnk][1], p[LM.rAnk][1]);
+    return head > hip + 0.2 && hip > ank + 0.2 && hip < 2.2 && head < 3.2;
+  });
+  for (let i = 0; i < poses.length; i++) {
+    if (plausible[i]) continue;
+    for (let d = 1; d < 30; d++) {
+      const k = [i - d, i + d].find((j) => j >= 0 && j < poses.length && plausible[j]);
+      if (k != null) { poses[i] = poses[k]; break; }
+    }
+    reliable[i] = false;
+  }
   poses.reliable = reliable;
   return poses;
 }
@@ -164,12 +179,12 @@ function drawGround(ctx, view, panel) {
   }
 }
 
-function drawFigure(ctx, pose, view, panel, color, alpha) {
+function drawFigure(ctx, pose, view, panel, color, alpha, showSkis = false) {
   const P = pose.map((p) => project(p, view, panel));
   const items = [];
 
-  // 板（かかと→つま先の方向に伸ばす）
-  for (const [ank, heel, toe] of [[LM.lAnk, LM.lHeel, LM.lFoot], [LM.rAnk, LM.rHeel, LM.rFoot]]) {
+  // 板（かかと→つま先の方向に伸ばす）。足先の点が不安定でバラバラに見えやすいので、標準では描かない
+  for (const [ank, heel, toe] of showSkis ? [[LM.lAnk, LM.lHeel, LM.lFoot], [LM.rAnk, LM.rHeel, LM.rFoot]] : []) {
     let d = sub(pose[toe], pose[heel]);
     d = [d[0], 0, d[2]];
     const l = Math.hypot(d[0], d[2]);
@@ -248,6 +263,7 @@ export function createViewer({ canvas, model, user, info, seek, playBtn, speedSe
   let lastTs = 0;
   let raf = 0;
   let lastKey = '';
+  let showSkis = false;
 
   const setPlaying = (v) => {
     playing = v;
@@ -280,8 +296,8 @@ export function createViewer({ canvas, model, user, info, seek, playBtn, speedSe
     if (mode === 'side') {
       const panels = [{ ox: w * 0.25, oy: h * 0.8, k }, { ox: w * 0.75, oy: h * 0.8, k }];
       panels.forEach((p) => drawGround(ctx, view, p));
-      drawFigure(ctx, mPose, view, panels[0], cModel, 1);
-      drawFigure(ctx, uPose, view, panels[1], cUser, 1);
+      drawFigure(ctx, mPose, view, panels[0], cModel, 1, showSkis);
+      drawFigure(ctx, uPose, view, panels[1], cUser, 1, showSkis);
       ctx.fillStyle = cModel;
       ctx.fillText('お手本', 12, 10);
       ctx.fillStyle = cUser;
@@ -294,8 +310,8 @@ export function createViewer({ canvas, model, user, info, seek, playBtn, speedSe
     } else {
       const panel = { ox: w / 2, oy: h * 0.8, k };
       drawGround(ctx, view, panel);
-      drawFigure(ctx, mPose, view, panel, cModel, 0.5);
-      drawFigure(ctx, uPose, view, panel, cUser, 0.85);
+      drawFigure(ctx, mPose, view, panel, cModel, 0.5, showSkis);
+      drawFigure(ctx, uPose, view, panel, cUser, 0.85, showSkis);
       ctx.fillStyle = cModel;
       ctx.fillText('お手本（薄い色）', 12, 10);
       ctx.fillStyle = cUser;
@@ -329,7 +345,7 @@ export function createViewer({ canvas, model, user, info, seek, playBtn, speedSe
     }
     lastTs = ts;
     // 止まっていて何も変わっていなければ描き直さない（スマホの負荷を減らす）
-    const key = [pos.toFixed(3), view.yaw.toFixed(3), view.pitch.toFixed(3), mode, source, canvas.clientWidth, canvas.clientHeight, speedSel.value].join('|');
+    const key = [pos.toFixed(3), view.yaw.toFixed(3), view.pitch.toFixed(3), mode, source, showSkis, canvas.clientWidth, canvas.clientHeight, speedSel.value].join('|');
     if (key === lastKey) return;
     lastKey = key;
     draw();
@@ -368,6 +384,7 @@ export function createViewer({ canvas, model, user, info, seek, playBtn, speedSe
       view.pitch = VIEWS[name].pitch * RAD;
     },
     setMode(m) { mode = m; },
+    setShowSkis(v) { showSkis = v; },
     canAverage: !!averageTimeline,
     setSource(s) {
       if (s === 'average' && !averageTimeline) return;

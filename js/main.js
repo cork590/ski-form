@@ -728,6 +728,8 @@ async function renderResults({ model, modelAna, userFile, userPose, userAna, res
   segment('view-buttons', 'view', (v) => viewer.setView(v));
   segment('mode-buttons', 'mode', (m) => viewer.setMode(m));
   segment('source-buttons', 'source', (s) => viewer.setSource(s));
+  $('ski-toggle').onchange = () => viewer.setShowSkis($('ski-toggle').checked);
+  viewer.setShowSkis($('ski-toggle').checked);
   $('source-buttons').querySelector('[data-source="average"]').disabled = !viewer.canAverage;
   $('source-buttons').querySelector('[data-source="actual"]').click();
   $('view-buttons').querySelector('[data-view="front"]').click();
