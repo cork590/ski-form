@@ -1,5 +1,5 @@
 import { listModels, getModel, saveModel, deleteModel } from './db.js';
-import { extractPose, findPeople, MIN_PERSON, SMALL_PERSON, showCurrentFrame } from './pose.js';
+import { extractPose, findPeople, MIN_PERSON, SMALL_PERSON, showCurrentFrame, onModelProgress } from './pose.js';
 import { fitCanvas, containRect } from './draw.js';
 import { analyzeSession, compare, METRICS, PHASES, turnRelative } from './analysis.js';
 import { attachSkeleton, drawProfileChart, createFlipbook, drawTimingChart, turnPhaseName, drawTurnShape } from './draw.js';
@@ -28,6 +28,17 @@ const state = {
 };
 
 try { state.selectedId = localStorage.getItem('selectedModelId'); } catch {}
+
+// AIモデルの読み込みの進み具合を、今見えている案内に表示する（止まって見えないように）
+onModelProgress((p) => {
+  if (p >= 1) return;
+  const msg = `AIモデルを読み込み中… ${Math.round(p * 100)}%（約43MB・初回のみ。次回からはすぐ使えます）`;
+  if ($('pick-dialog').open) $('pick-status').textContent = msg;
+  for (const id of ['model-progress', 'user-progress']) {
+    const el = $(id);
+    if (!el.classList.contains('hidden')) { el.querySelector('span').textContent = msg; el.querySelector('progress').value = p; }
+  }
+});
 
 $('version').textContent = `v${VERSION}${IS_BETA ? '（試験版）' : ''}`;
 if (IS_BETA) document.body.classList.add('beta');

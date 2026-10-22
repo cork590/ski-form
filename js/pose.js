@@ -22,6 +22,39 @@ export const MIN_PERSON = 0.02; // 人物の高さがこれ未満（画面比）
 export const SMALL_PERSON = 0.06; // これ未満は解析はするが精度が下がる
 
 let modelsPromise = null;
+
+// AIモデルの読み込み状況（0〜1）を知らせる先。画面側で設定する
+let modelProgressListener = null;
+export function onModelProgress(fn) { modelProgressListener = fn; }
+
+// AIモデルを、進み具合を知らせながらダウンロードする。一度読み込んだらアプリ内（Cache Storage）に保存し、次回からはすぐ使う
+async function loadModelFile(url, done, total, report) {
+  let cache = null;
+  try { cache = await caches.open('ski-form-models-v1'); } catch {}
+  const hit = cache && (await cache.match(url));
+  if (hit) {
+    const buf = await hit.arrayBuffer();
+    report(done + buf.byteLength, total);
+    return new Uint8Array(buf);
+  }
+  const res = await fetch(url);
+  if (!res.ok || !res.body) throw new Error(`AIモデルを読み込めませんでした（${res.status}）`);
+  const reader = res.body.getReader();
+  const chunks = [];
+  let got = 0;
+  for (;;) {
+    const { value, done: end } = await reader.read();
+    if (end) break;
+    chunks.push(value);
+    got += value.length;
+    report(done + got, total);
+  }
+  const bytes = new Uint8Array(got);
+  let off = 0;
+  for (const c of chunks) { bytes.set(c, off); off += c.length; }
+  try { await cache?.put(url, new Response(bytes.slice().buffer)); } catch {}
+  return bytes;
+}
 // 診断用：実際に使われた計算方法（GPU/CPU）。URLに ?cpu=1 を付けるとCPUで計算する
 export const diagnostics = { pose: null, detector: null };
 export const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -42,6 +75,14 @@ function getModels() {
       // 重いライブラリは解析時に読み込む（画面の表示を止めないため）
       const { FilesetResolver, PoseLandmarker, ObjectDetector } = await import(BUNDLE);
       const fileset = await FilesetResolver.forVisionTasks(WASM);
+      // 骨格AI（約30MB）と人物検出AI（約12MB）を読み込む
+      const poseUrl = LOCAL_MODELS ? 'models/pose_landmarker_heavy.task' : POSE_MODEL;
+      const detUrl = LOCAL_MODELS ? 'models/efficientdet_lite2.tflite' : DETECT_MODEL;
+      const TOTAL = 42.8e6;
+      const report = (n) => modelProgressListener?.(Math.min(1, n / TOTAL));
+      const poseBytes = await loadModelFile(poseUrl, 0, TOTAL, report);
+      const detBytes = await loadModelFile(detUrl, poseBytes.byteLength, TOTAL, report);
+      modelProgressListener?.(1);
       const create = async (factory, opts, name) => {
         if (!FORCE_CPU) {
           try {
@@ -54,7 +95,7 @@ function getModels() {
         return await factory.createFromOptions(fileset, { ...opts, baseOptions: { ...opts.baseOptions, delegate: 'CPU' } });
       };
       const poseOpts = (runningMode) => ({
-        baseOptions: { modelAssetPath: LOCAL_MODELS ? 'models/pose_landmarker_heavy.task' : POSE_MODEL },
+        baseOptions: { modelAssetBuffer: poseBytes },
         runningMode,
         numPoses: 1,
         minPoseDetectionConfidence: 0.4,
@@ -67,7 +108,7 @@ function getModels() {
       const pose = await create(PoseLandmarker, poseOpts('VIDEO'), 'pose');
       const poseImage = await create(PoseLandmarker, poseOpts('IMAGE'), 'pose');
       const detector = await create(ObjectDetector, {
-        baseOptions: { modelAssetPath: LOCAL_MODELS ? 'models/efficientdet_lite2.tflite' : DETECT_MODEL },
+        baseOptions: { modelAssetBuffer: detBytes },
         runningMode: 'IMAGE',
         scoreThreshold: 0.2,
         maxResults: 8,

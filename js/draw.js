@@ -154,6 +154,7 @@ export function createFlipbook(canvas, pose, { isSkeletonVisible, isZoom = () =>
   // 再生中は元の動画をなめらかに描き、骨格とズーム範囲はコマの間を補間する（usingVideo）。
   // 止まっている間は解析したコマの画像を表示する（iPhone でシーク後の画像が更新されない問題を避けるため）
   let usingVideo = false;
+  let lastVideoPos = -1, lastVideoMove = 0;
   // 実際に画面に出たコマの時刻（requestVideoFrameCallback）。video.currentTime は iPhone で表示より遅れることがあり、
   // そのまま使うと骨格と映像の脚の動きがずれて「足踏み」しているように見える
   let shownTime = null;
@@ -254,12 +255,18 @@ export function createFlipbook(canvas, pose, { isSkeletonVisible, isZoom = () =>
   const loop = (ts) => {
     raf = requestAnimationFrame(loop);
     if (state.playing && usingVideo) {
-      pos = Math.min(last, (shownTime ?? video.currentTime) * pose.fps);
+      const p = Math.min(last, (shownTime ?? video.currentTime) * pose.fps);
+      if (p !== lastVideoPos) { lastVideoPos = p; lastVideoMove = ts; }
+      pos = p;
       dirty = true;
       if (pos >= last || video.ended) {
         pos = last;
         stopVideo();
         state.playing = false;
+      } else if (video.paused || ts - lastVideoMove > 600) {
+        // iPhone が途中で動画を止めた・進まなくなった：ここからはコマの画像で再生を続ける
+        stopVideo();
+        lastTs = ts;
       }
       onChange();
     } else if (state.playing && lastTs) {
@@ -289,6 +296,8 @@ export function createFlipbook(canvas, pose, { isSkeletonVisible, isZoom = () =>
       if (video?.src) {
         usingVideo = true;
         shownTime = null;
+        lastVideoPos = -1;
+        lastVideoMove = performance.now() + 800; // 再生が始まるまでの猶予
         watchFrames();
         video.currentTime = pos / pose.fps;
         video.playbackRate = r;
