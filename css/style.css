@@ -271,11 +271,16 @@ main { max-width: 1100px; margin: 0 auto; padding: 8px 16px 48px; }
 }
 .onboarding::backdrop { background: rgba(0, 0, 0, 0.55); }
 .onb-close { position: absolute; top: 8px; right: 10px; border: 0; background: none; font-size: 1.6rem; line-height: 1; color: var(--text-muted); cursor: pointer; z-index: 1; }
-.onb-zoom { position: relative; overflow: hidden; border-radius: 12px; background: var(--bg); touch-action: none; }
-.onb-img { display: block; width: 100%; max-height: 52vh; object-fit: contain; user-select: none; -webkit-user-select: none; transform-origin: 0 0; will-change: transform; }
-.onb-zoom-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
-.onb-zoom-bar .btn { font-size: 0.95rem; padding: 6px 12px; }
-.onb-zoom-hint { flex: 1; font-size: 0.75rem; color: var(--text-muted); }
+.onb-zoom { position: relative; border-radius: 12px; background: var(--bg); }
+.onb-img { display: block; width: 100%; max-height: 60vh; object-fit: contain; user-select: none; -webkit-user-select: none; }
+.onb-zoom-hint { font-size: 0.8rem; color: var(--text-muted); margin: 6px 0 0; }
+/* スマホでは画面いっぱいに表示する（画像と文字をできるだけ大きく） */
+@media (max-width: 700px) {
+  .onboarding { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; border-radius: 0; padding: 12px 12px 16px; }
+  .onb-img { max-height: 62dvh; }
+  .onboarding h2 { font-size: 1.2rem; }
+  .onb-text { font-size: 1rem; }
+}
 .onboarding h2 { font-size: 1.1rem; margin: 12px 0 4px; }
 .onb-text { font-size: 0.9rem; color: var(--text-muted); margin: 0 0 10px; min-height: 3em; }
 .onb-dots { display: flex; justify-content: center; gap: 6px; margin-bottom: 10px; }

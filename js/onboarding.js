@@ -24,11 +24,9 @@ export function initOnboarding() {
     $('onb-prev').disabled = index === 0;
     $('onb-next').textContent = index === SLIDES.length - 1 ? 'はじめる' : '次へ →';
   };
-  let resetZoom = () => {};
   const go = (d) => {
     index = Math.min(SLIDES.length - 1, Math.max(0, index + d));
     render();
-    resetZoom(); // カードを切り替えたら等倍に戻す
   };
   const close = () => {
     try {
@@ -39,7 +37,6 @@ export function initOnboarding() {
   };
   const open = () => {
     index = 0;
-    resetZoom();
     let hidden = false;
     try { hidden = localStorage.getItem(HIDE_KEY) === '1'; } catch {}
     $('onb-hide').checked = hidden;
@@ -53,87 +50,31 @@ export function initOnboarding() {
   dlg.addEventListener('cancel', (e) => { e.preventDefault(); close(); });
   $('open-onboarding').onclick = (e) => { e.preventDefault(); open(); };
 
-  // 拡大・縮小：ピンチ（2本指）、ダブルタップ、＋／−ボタン。拡大中は1本指で移動、等倍のときは左右スワイプで切り替え
-  const box = $('onb-zoom'), img = $('onb-img');
-  let scale = 1, tx = 0, ty = 0;
-  const MAX = 4;
-  const clampPan = () => {
-    const w = box.clientWidth, h = box.clientHeight;
-    tx = Math.min(0, Math.max(w - w * scale, tx));
-    ty = Math.min(0, Math.max(h - h * scale, ty));
-  };
-  const apply = () => {
-    clampPan();
-    img.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
-    $('onb-zoom-out').disabled = scale <= 1;
-    $('onb-zoom-in').disabled = scale >= MAX;
-  };
-  // (cx, cy) を中心に倍率を変える（箱の中の座標）
-  const zoomAt = (next, cx, cy) => {
-    next = Math.min(MAX, Math.max(1, next));
-    tx = cx - ((cx - tx) * next) / scale;
-    ty = cy - ((cy - ty) * next) / scale;
-    scale = next;
-    if (scale === 1) { tx = 0; ty = 0; }
-    apply();
-  };
-  resetZoom = () => { scale = 1; tx = 0; ty = 0; apply(); };
-  $('onb-zoom-in').onclick = () => zoomAt(scale * 1.5, box.clientWidth / 2, box.clientHeight / 2);
-  $('onb-zoom-out').onclick = () => zoomAt(scale / 1.5, box.clientWidth / 2, box.clientHeight / 2);
-
-  const pts = new Map();
-  let pinch = null, pan = null, swipeX = null, lastTap = 0;
-  const local = (e) => { const r = box.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
-  box.addEventListener('pointerdown', (e) => {
-    try { box.setPointerCapture(e.pointerId); } catch {}
-    pts.set(e.pointerId, local(e));
-    if (pts.size === 2) {
-      const [a, b] = [...pts.values()];
-      pinch = { d: Math.hypot(a[0] - b[0], a[1] - b[1]), s: scale };
-      pan = null;
-      swipeX = null;
-    } else if (pts.size === 1) {
-      const [x, y] = local(e);
-      // ダブルタップ：等倍なら2.5倍に、拡大中なら元に戻す
-      const now = performance.now();
-      if (now - lastTap < 300) {
-        if (scale > 1) resetZoom(); else zoomAt(2.5, x, y);
-        lastTap = 0;
-        return;
-      }
-      lastTap = now;
-      if (scale > 1) pan = { x, y, tx, ty }; else swipeX = e.clientX;
-    }
+  // 左右スワイプでカードを切り替える。拡大は端末の機能（2本指で画面全体を拡大）に任せ、
+  // 画面を拡大している間はスワイプで切り替えない（拡大した画面を動かしているだけなので）
+  const zoomed = () => (window.visualViewport?.scale ?? 1) > 1.05;
+  let startX = null, startY = null;
+  const box = $('onb-zoom');
+  box.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1 || zoomed()) { startX = null; return; }
+    startX = e.touches[0].clientX; startY = e.touches[0].clientY;
+  }, { passive: true });
+  box.addEventListener('touchend', (e) => {
+    if (startX == null || zoomed()) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - startX, dy = t.clientY - startY;
+    startX = null;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) go(dx < 0 ? 1 : -1);
   });
-  box.addEventListener('pointermove', (e) => {
-    if (!pts.has(e.pointerId)) return;
-    pts.set(e.pointerId, local(e));
-    if (pinch && pts.size === 2) {
-      const [a, b] = [...pts.values()];
-      const d = Math.hypot(a[0] - b[0], a[1] - b[1]);
-      zoomAt((pinch.s * d) / (pinch.d || 1), (a[0] + b[0]) / 2, (a[1] + b[1]) / 2);
-    } else if (pan) {
-      const [x, y] = local(e);
-      tx = pan.tx + (x - pan.x);
-      ty = pan.ty + (y - pan.y);
-      apply();
-    }
+  // マウス（PC）でのドラッグでも切り替えられるようにする
+  let mouseX = null;
+  box.addEventListener('mousedown', (e) => { mouseX = e.clientX; });
+  box.addEventListener('mouseup', (e) => {
+    if (mouseX == null) return;
+    const dx = e.clientX - mouseX;
+    mouseX = null;
+    if (Math.abs(dx) > 50) go(dx < 0 ? 1 : -1);
   });
-  const end = (e) => {
-    pts.delete(e.pointerId);
-    if (pts.size < 2) pinch = null;
-    if (pts.size === 0) {
-      pan = null;
-      if (swipeX != null && scale === 1) {
-        const dx = e.clientX - swipeX;
-        if (Math.abs(dx) > 40) go(dx < 0 ? 1 : -1);
-      }
-      swipeX = null;
-    }
-  };
-  box.addEventListener('pointerup', end);
-  box.addEventListener('pointercancel', end);
-  apply();
 
   // 画像を先に読み込んでおく
   for (const s of SLIDES) { const im = new Image(); im.src = s.img; }
