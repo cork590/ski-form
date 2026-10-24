@@ -9,7 +9,7 @@
 <body>
   <header class="app-header">
     <h1>スキーフォーム解析</h1>
-    <p class="sub">お手本の滑りと比べて、どこを直せば近づけるかを表示します</p>
+    <p class="sub">お手本の滑りと比べて、どこを直せば近づけるかを表示します ・ <a href="#" id="open-onboarding">使い方を見る</a></p>
     <div class="beta-banner">試験版です。新しい機能を試すためのページで、公開版とはお手本のデータが別に保存されます。</div>
   </header>
 
@@ -186,6 +186,19 @@
       <button id="pick-back" class="btn">← 戻る</button>
       <button id="pick-next" class="btn primary"></button>
     </div>
+  </dialog>
+
+  <dialog id="onboarding" class="onboarding">
+    <button id="onb-close" class="onb-close" aria-label="閉じる">×</button>
+    <img id="onb-img" class="onb-img" alt="" draggable="false">
+    <h2 id="onb-title"></h2>
+    <p id="onb-text" class="onb-text"></p>
+    <div id="onb-dots" class="onb-dots"></div>
+    <div class="onb-actions">
+      <button id="onb-prev" class="btn">← 戻る</button>
+      <button id="onb-next" class="btn primary">次へ →</button>
+    </div>
+    <label class="check onb-hide"><input type="checkbox" id="onb-hide"> 次回から表示しない</label>
   </dialog>
 
   <footer class="app-footer"><span id="version"></span></footer>

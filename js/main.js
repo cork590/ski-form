@@ -6,6 +6,7 @@ import { attachSkeleton, drawProfileChart, createFlipbook, drawTimingChart, turn
 import { createViewer } from './viewer3d.js';
 import { IS_BETA, VERSION } from './config.js';
 import { resolveSlope } from './terrain.js';
+import { initOnboarding } from './onboarding.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -918,3 +919,4 @@ window.addEventListener('resize', drawCharts);
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', drawCharts);
 
 renderModelList();
+initOnboarding();

@@ -264,6 +264,22 @@ main { max-width: 1100px; margin: 0 auto; padding: 8px 16px 48px; }
 .diag-item ul { margin: 4px 0; padding-left: 1.2em; }
 .diag-samples { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 8px; }
 .diag-samples img { width: 96px; height: 96px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border); }
+.onboarding {
+  width: min(420px, calc(100vw - 24px)); max-height: calc(100vh - 24px); overflow: auto;
+  border: 0; border-radius: 16px; padding: 16px 16px 12px; background: var(--surface); color: var(--text);
+  text-align: center; position: relative;
+}
+.onboarding::backdrop { background: rgba(0, 0, 0, 0.55); }
+.onb-close { position: absolute; top: 8px; right: 10px; border: 0; background: none; font-size: 1.6rem; line-height: 1; color: var(--text-muted); cursor: pointer; z-index: 1; }
+.onb-img { width: 100%; max-height: 52vh; object-fit: contain; border-radius: 12px; user-select: none; touch-action: pan-y; background: var(--bg); }
+.onboarding h2 { font-size: 1.1rem; margin: 12px 0 4px; }
+.onb-text { font-size: 0.9rem; color: var(--text-muted); margin: 0 0 10px; min-height: 3em; }
+.onb-dots { display: flex; justify-content: center; gap: 6px; margin-bottom: 10px; }
+.onb-dots span { width: 7px; height: 7px; border-radius: 50%; background: var(--border); }
+.onb-dots span.active { background: var(--accent); width: 18px; border-radius: 4px; }
+.onb-actions { display: flex; justify-content: space-between; gap: 10px; }
+.onb-actions .btn { flex: 1; }
+.onb-hide { justify-content: center; margin-top: 10px; color: var(--text-muted); }
 .tips-card { padding: 8px 12px; }
 .tips-card .tips { margin: 0; background: none; }
 .tips-sub { margin: 4px 0 0; padding-left: 1.2em; color: var(--text-muted); font-size: 0.85rem; }
