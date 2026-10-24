@@ -190,7 +190,14 @@
 
   <dialog id="onboarding" class="onboarding">
     <button id="onb-close" class="onb-close" aria-label="閉じる">×</button>
-    <img id="onb-img" class="onb-img" alt="" draggable="false">
+    <div class="onb-zoom" id="onb-zoom">
+      <img id="onb-img" class="onb-img" alt="" draggable="false">
+    </div>
+    <div class="onb-zoom-bar">
+      <button id="onb-zoom-out" class="btn small" aria-label="縮小">− 縮小</button>
+      <span class="onb-zoom-hint">2本指で広げる・ダブルタップでも拡大できます</span>
+      <button id="onb-zoom-in" class="btn small" aria-label="拡大">＋ 拡大</button>
+    </div>
     <h2 id="onb-title"></h2>
     <p id="onb-text" class="onb-text"></p>
     <div id="onb-dots" class="onb-dots"></div>
