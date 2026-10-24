@@ -247,7 +247,7 @@ function isSamePerson(full, roi, W, H) {
 // 解析後の仕上げ：
 //  1. 骨格のブレをならす（連続して検出できたコマの間で、前後1コマとの平均をとる）
 //  2. 骨格を取れなかった短い区間（最大10コマ＝約0.7秒）を、前後のコマから予測して埋める（predicted: true）
-const MAX_PREDICT = 10;
+const MAX_PREDICT = 8;
 // 左右の取り違えを直す：AIはコマごとに左右の脚・腕を取り違えることがある（黒いウェアなどで起きやすい）。
 // 前のコマと比べて、左右を入れ替えた方が近ければ入れ替える。最後に、大半のコマで入れ替わっていたら全体を元に戻す
 const LR_GROUPS = [
@@ -306,7 +306,14 @@ function finalizeFrames(frames, first, last) {
   for (let i = first; i <= last; i++) {
     if (!ok(frames[i])) continue;
     const gap = i - prev - 1;
-    if (prev >= 0 && gap > 0 && gap <= MAX_PREDICT) {
+    // 前後のコマの骨格が大きく離れているときは、予測しない（でたらめな骨格になるため）
+    const center = (lm) => [(lm[23][0] + lm[24][0]) / 2, (lm[23][1] + lm[24][1]) / 2];
+    const height = (lm) => Math.abs((lm[27][1] + lm[28][1]) / 2 - (lm[11][1] + lm[12][1]) / 2) || 0.05;
+    const far = prev >= 0 && (() => {
+      const [ax, ay] = center(frames[prev].lm), [bx, by] = center(frames[i].lm);
+      return Math.hypot(bx - ax, by - ay) > height(frames[prev].lm) * 0.8 * (gap + 1) / 2;
+    })();
+    if (prev >= 0 && gap > 0 && gap <= MAX_PREDICT && !far) {
       for (let k = prev + 1; k < i; k++) {
         const t = (k - prev) / (i - prev);
         const f = frames[k];
@@ -318,6 +325,31 @@ function finalizeFrames(frames, first, last) {
     }
     prev = i;
   }
+}
+
+// 骨格のもっともらしさ（大きいほど良い、だいたい 0〜1）。
+// 左右の太もも・すね・上腕・前腕の長さはほぼ同じはず、脚と胴の長さの比も一定の範囲に入るはず、という性質を使う
+// 実測：まともな骨格でも、AIの3D推定は左右の長さが中央値で約24%違う（奥行きの誤差）。それを超える分だけを減点する
+const GOOD_QUALITY = 0.7, MIN_QUALITY = 0.45;
+const MIRROR = (() => {
+  const m = Array.from({ length: 33 }, (_, i) => i);
+  for (const [a, b] of [[1, 4], [2, 5], [3, 6], [7, 8], [9, 10], [11, 12], [13, 14], [15, 16], [17, 18],
+    [19, 20], [21, 22], [23, 24], [25, 26], [27, 28], [29, 30], [31, 32]]) { m[a] = b; m[b] = a; }
+  return m;
+})();
+function poseQuality(full, wl) {
+  const L = (a, b) => Math.hypot(wl[a].x - wl[b].x, wl[a].y - wl[b].y, wl[a].z - wl[b].z) || 1e-6;
+  const sym = [[23, 25, 24, 26], [25, 27, 26, 28], [11, 13, 12, 14], [13, 15, 14, 16]]
+    .map(([a, b, c, d]) => Math.abs(Math.log(L(a, b) / L(c, d))));
+  const symPenalty = sym.reduce((s, v) => s + v, 0) / sym.length;
+  const mid = (a, b) => ({ x: (wl[a].x + wl[b].x) / 2, y: (wl[a].y + wl[b].y) / 2, z: (wl[a].z + wl[b].z) / 2 });
+  const sh = mid(11, 12), hp = mid(23, 24);
+  const torso = Math.hypot(sh.x - hp.x, sh.y - hp.y, sh.z - hp.z) || 1e-6;
+  const legRatio = (L(23, 25) + L(25, 27) + L(24, 26) + L(26, 28)) / 2 / torso;
+  const ratioPenalty = legRatio < 1.0 || legRatio > 3.2 ? 0.4 : 0;
+  const keys = [11, 12, 23, 24, 25, 26, 27, 28];
+  const vis = keys.reduce((s, k) => s + full[k][2], 0) / keys.length;
+  return vis - 0.6 * Math.max(0, symPenalty - 0.3) - ratioPenalty;
 }
 
 const roiFromBox = (b) => ({ cx: b.x + b.w / 2, cy: b.y + b.h / 2, size: Math.max(b.w, b.h) * MARGIN, h: b.h });
@@ -436,18 +468,45 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
         frame.zoom = zoomCanvas.toDataURL('image/jpeg', 0.75);
         frame.zoomRoi = [x0 / W, y0 / H, roi.size / W, roi.size / H].map(r4);
         ts += Math.round(1000 / fps);
-        // 切り出し画像内の座標 → 元の動画の座標（0〜1）
-        const toFull = (res) => {
+        // 切り出し画像内の座標 → 元の動画の座標（0〜1）。flip のときは左右反転した画像の結果を元に戻す
+        const toFull = (res, cx0, cy0, size, flip) => {
           const l = res.landmarks?.[0], w = res.worldLandmarks?.[0];
-          return l && w ? { lm: l, wl: w, full: l.map((p) => [(x0 + p.x * roi.size) / W, (y0 + p.y * roi.size) / H, p.visibility ?? 1]) } : null;
+          if (!l || !w) return null;
+          let lm2 = l.map((p) => [flip ? 1 - p.x : p.x, p.y, p.visibility ?? 1]);
+          let wl2 = w.map((p) => ({ x: flip ? -p.x : p.x, y: p.y, z: p.z }));
+          if (flip) {
+            lm2 = lm2.map((_, k) => lm2[MIRROR[k]]);
+            wl2 = wl2.map((_, k) => wl2[MIRROR[k]]);
+          }
+          const full = lm2.map((p) => [(cx0 + p[0] * size) / W, (cy0 + p[1] * size) / H, p[2]]);
+          return { wl: wl2, full, q: poseQuality(full, wl2) };
         };
         const ok = (r) => r && isSamePerson(r.full, roi, W, H);
-        let r = toFull(pose.detectForVideo(crop, ts));
+        let keepRoi = false; // 人はいるが骨格が不自然だったとき：追跡はそのまま続ける
+        let r = toFull(pose.detectForVideo(crop, ts), x0, y0, roi.size, false);
         if (!ok(r)) {
-          const retry = toFull(poseImage.detect(crop));
+          const retry = toFull(poseImage.detect(crop), x0, y0, roi.size, false);
           if (ok(retry)) { r = retry; retried++; }
         }
-        const lm = r?.lm, wl = r?.wl, full = r?.full ?? null;
+        // 骨格が不自然（左右の手足の長さが大きく違う・信頼度が低いなど）なら、切り出しの大きさを変えたり
+        // 左右反転した画像で探し直し、一番自然なものを使う。どれも不自然なら、このコマは使わない
+        if (ok(r) && r.q < GOOD_QUALITY) {
+          const tries = [[roi.size * 0.82, false], [roi.size * 1.25, false], [roi.size, true]];
+          for (const [size, flip] of tries) {
+            const cx0 = roi.cx - size / 2, cy0 = roi.cy - size / 2;
+            altCtx.fillStyle = '#808080';
+            altCtx.fillRect(0, 0, CROP, CROP);
+            altCtx.save();
+            if (flip) { altCtx.translate(CROP, 0); altCtx.scale(-1, 1); }
+            altCtx.drawImage(src, cx0 * srcScale, cy0 * srcScale, size * srcScale, size * srcScale, 0, 0, CROP, CROP);
+            altCtx.restore();
+            const cand = toFull(poseImage.detect(alt), cx0, cy0, size, flip);
+            if (ok(cand) && cand.q > r.q) { r = cand; improved++; }
+            if (r.q >= GOOD_QUALITY) break;
+          }
+          if (r.q < MIN_QUALITY) { r = null; lowQuality++; keepRoi = true; }
+        }
+        const wl = r?.wl, full = r?.full ?? null;
         if (full && !ok(r)) {
           // 骨格が追跡中の位置から大きく飛んだ＝近くを通った別の人に乗り移った可能性が高い。
           // このコマは使わず、次のコマで物体検出から探し直す（直前の位置に近い人を優先）
@@ -472,7 +531,7 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
             st.roi = { cx: next.cx, cy: next.cy, size: clamp(roi.size * 0.5 + next.size * 0.5, roi.size), h: clamp(roi.h * 0.5 + box.h * 0.5, roi.h) };
             frame.size = r4(st.roi.h / H);
           }
-        } else {
+        } else if (!keepRoi) {
           noPose++;
           st.roi = null; // 見失ったら次のコマで探し直す
         }
@@ -486,7 +545,10 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
     // その画像を使って PC と同じ手順（選んだ場面から前後へ追跡）で解析する。
     // iPhone はシークしても画像が更新されないことがあるため、再生中に表示されたコマを使う
     let mode = 'seek';
-    let rejected = 0, noPose = 0, retried = 0; // 診断用：別人と判断して捨てた数／骨格が返ってこなかった数
+    let rejected = 0, noPose = 0, retried = 0, improved = 0, lowQuality = 0;
+    const alt = document.createElement('canvas');
+    alt.width = alt.height = CROP;
+    const altCtx = alt.getContext('2d'); // 診断用：別人と判断して捨てた数／骨格が返ってこなかった数
     let gaps = 0;
     // 取り込む画像は長い辺を1920pxまでに縮小する（大きな動画で iPhone の取り込みが追いつかないため）
     const capScale = Math.min(1, 1920 / Math.max(W, H));
@@ -611,7 +673,7 @@ export async function extractPose(file, { fps = 15, target = null, range = null,
       diag: {
         seconds: Math.round((performance.now() - startedAt) / 100) / 10,
         pose: diagnostics.pose, detector: diagnostics.detector,
-        frameCallback: frameCallbackWorks, samples, stale, mode, gaps, rejected, noPose, retried, predicted, lrFixed,
+        frameCallback: frameCallbackWorks, samples, stale, mode, gaps, rejected, noPose, retried, predicted, lrFixed, improved, lowQuality,
         captureSec, analyzeSec: Math.round((performance.now() - analyzeStart) / 100) / 10,
       },
     };
